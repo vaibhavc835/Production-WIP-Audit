@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Home | Production WIP Audit</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', system-ui, sans-serif; }
+    body { background: #f1f5f9; min-height: 100vh; }
+    header {
+      background: #0f172a;
+      color: white;
+      padding: 16px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    header h1 { font-size: 18px; font-weight: 600; }
+    .user-info { font-size: 13px; opacity: 0.85; }
+    .logout-btn {
+      background: #334155;
+      color: white;
+      border: none;
+      padding: 7px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      margin-left: 12px;
+    }
+    .logout-btn:hover { background: #475569; }
+    .container { max-width: 1100px; margin: 30px auto; padding: 0 20px; }
+    .welcome { margin-bottom: 24px; }
+    .welcome h2 { font-size: 22px; color: #0f172a; }
+    .welcome p { color: #64748b; font-size: 14px; margin-top: 4px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 16px;
+    }
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 22px 18px;
+      text-align: center;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+      cursor: pointer;
+      transition: 0.2s;
+      border: 1px solid #e2e8f0;
+    }
+    .card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+      border-color: #3b82f6;
+    }
+    .card h3 { font-size: 15px; color: #0f172a; margin-bottom: 6px; }
+    .card p { font-size: 12px; color: #64748b; }
+    .admin-link {
+      display: inline-block;
+      margin-top: 30px;
+      background: #2563eb;
+      color: white;
+      padding: 10px 20px;
+      border-radius: 8px;
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .admin-link:hover { background: #1d4ed8; }
+    .no-access {
+      background: white;
+      padding: 40px;
+      border-radius: 12px;
+      text-align: center;
+      color: #64748b;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>Production WIP Audit</h1>
+    <div>
+      <span class="user-info" id="userEmail">Loading...</span>
+      <button class="logout-btn" id="logoutBtn">Logout</button>
+    </div>
+  </header>
+
+  <div class="container">
+    <div class="welcome">
+      <h2>Select Area</h2>
+      <p>Choose the area you want to view</p>
+    </div>
+
+    <div class="grid" id="areaGrid">
+      <!-- Areas will load here -->
+    </div>
+
+    <div id="adminSection" style="display:none; text-align:center;">
+      <a href="admin.html" class="admin-link">Go to Admin Panel</a>
+    </div>
+  </div>
+
+  <script type="module">
+    import { checkAuth, logoutUser, getUserProfile, ALL_AREAS } from './js/firebase-config.js';
+
+    const areaGrid = document.getElementById("areaGrid");
+    const userEmail = document.getElementById("userEmail");
+    const adminSection = document.getElementById("adminSection");
+
+    checkAuth(async (user) => {
+      if (!user) {
+        window.location.href = "index.html";
+        return;
+      }
+
+      userEmail.textContent = user.email;
+
+      const profile = await getUserProfile(user.uid);
+
+      if (!profile) {
+        areaGrid.innerHTML = `<div class="no-access">Your account is not fully set up. Contact Admin.</div>`;
+        return;
+      }
+
+      // Show Admin button if user is admin
+      if (profile.role === "admin") {
+        adminSection.style.display = "block";
+      }
+
+      // Get allowed areas
+      let areasToShow = [];
+      if (profile.role === "admin") {
+        areasToShow = ALL_AREAS; // Admin sees all
+      } else {
+        areasToShow = profile.allowedAreas || [];
+      }
+
+      if (areasToShow.length === 0) {
+        areaGrid.innerHTML = `<div class="no-access">No areas assigned to you.<br>Please contact Admin.</div>`;
+        return;
+      }
+
+      // Create cards
+      areaGrid.innerHTML = areasToShow.map(area => `
+        <div class="card" onclick="window.location.href='dashboard.html?area=${encodeURIComponent(area)}'">
+          <h3>${area}</h3>
+          <p>View Dashboard</p>
+        </div>
+      `).join('');
+    });
+
+    document.getElementById("logoutBtn").addEventListener("click", async () => {
+      await logoutUser();
+      window.location.href = "index.html";
+    });
+  </script>
+</body>
+</html>

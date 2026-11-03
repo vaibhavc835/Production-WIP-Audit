@@ -3,254 +3,459 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Admin Panel | Production WIP Audit</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', system-ui, sans-serif; }
-    body { background: #f1f5f9; min-height: 100vh; }
-    header {
-      background: #0f172a;
-      color: white;
-      padding: 14px 24px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    header h1 { font-size: 17px; }
-    .btn {
-      background: #334155;
-      color: white;
-      border: none;
-      padding: 7px 14px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 13px;
-      margin-left: 8px;
-    }
-    .btn:hover { background: #475569; }
-    .btn-primary { background: #2563eb; }
-    .btn-primary:hover { background: #1d4ed8; }
-    .btn-danger { background: #dc2626; }
-    .btn-danger:hover { background: #b91c1c; }
-    .container { max-width: 1100px; margin: 30px auto; padding: 0 20px; }
-    .tabs { display: flex; gap: 10px; margin-bottom: 20px; }
-    .tab {
-      padding: 10px 20px;
-      background: white;
-      border: 1px solid #e2e8f0;
-      border-radius: 8px;
-      cursor: pointer;
-      font-size: 14px;
-    }
-    .tab.active { background: #2563eb; color: white; border-color: #2563eb; }
-    .card {
-      background: white;
-      border-radius: 12px;
-      padding: 24px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-      border: 1px solid #e2e8f0;
-      margin-bottom: 20px;
-    }
-    h2 { font-size: 18px; margin-bottom: 16px; color: #0f172a; }
-    table { width: 100%; border-collapse: collapse; font-size: 14px; }
-    th { background: #f8fafc; text-align: left; padding: 12px; color: #475569; border-bottom: 1px solid #e2e8f0; }
-    td { padding: 12px; border-bottom: 1px solid #f1f5f9; }
-    input, select {
-      padding: 8px 12px;
-      border: 1px solid #cbd5e1;
-      border-radius: 6px;
-      font-size: 14px;
-      width: 100%;
-    }
-    .form-row { display: grid; grid-template-columns: 1fr 1fr 100px 100px 100px; gap: 10px; margin-bottom: 12px; align-items: end; }
-    .form-group label { display: block; font-size: 12px; margin-bottom: 4px; color: #64748b; }
-    .section { display: none; }
-    .section.active { display: block; }
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 600; }
-    .badge.admin { background: #dbeafe; color: #1e40af; }
-    .badge.user { background: #f1f5f9; color: #475569; }
-  </style>
+  <meta name="theme-color" content="#0b1220">
+  <title>Admin Control | Production WIP Audit</title>
 </head>
 <body>
+<script type="module">
+  import {
+    startPage, icon, esc, toast, openModal, confirmBox, friendlyError, DEPARTMENTS,
+    listUsers, updateUser, createUser,
+    listStations, stationId, saveStation, deleteStation, writeStations,
+    getAdminMessage, setAdminMessage, DEFAULT_ADMIN_MESSAGE
+  } from './js/wip-core.js';
 
-  <header>
-    <h1>Admin Panel</h1>
-    <div>
-      <button class="btn" onclick="window.location.href='home.html'">← Back to Home</button>
-      <button class="btn" id="logoutBtn">Logout</button>
+  // Only administrators get past this line (the database rules enforce it too).
+  const ctx = await startPage({ active: 'admin', adminOnly: true, title: 'Admin Control' });
+  const main = ctx.main;
+
+  const state = { users: [], stations: [], message: null, tab: 'users', loaded: { users: false, stations: false } };
+  const clean = (v) => String(v ?? '').replace(/\s+/g, ' ').trim();
+  const nk = (k) => String(k).toLowerCase().replace(/[^a-z0-9]/g, '');
+  const opts = (list, sel, blank) => (blank ? `<option value="">${blank}</option>` : '') +
+    list.map((o) => `<option ${o === sel ? 'selected' : ''}>${esc(o)}</option>`).join('');
+  const fixDept = (d) => DEPARTMENTS.find((x) => x.toLowerCase() === clean(d).toLowerCase()) || clean(d);
+
+  /* ---------- Layout ---------- */
+  main.innerHTML = `
+    <div class="page-head"><h1>Admin Control</h1>
+      <p>Manage who can sign in, the station inventory limits, and the message shown on Home.</p></div>
+    <div class="tiles" id="tabs">
+      <button type="button" class="tile" data-t="users"><span class="ico">${icon('users')}</span><span><b>User Database</b><small id="cUsers">Loading</small></span></button>
+      <button type="button" class="tile" data-t="inventory"><span class="ico">${icon('db')}</span><span><b>Inventory Database</b><small id="cInv">Loading</small></span></button>
+      <button type="button" class="tile" data-t="message"><span class="ico">${icon('msg')}</span><span><b>Admin Message</b><small>Shown on Home</small></span></button>
     </div>
-  </header>
+    <section id="panel" class="panel"></section>`;
+  const panel = main.querySelector('#panel');
 
-  <div class="container">
-    <div class="tabs">
-      <div class="tab active" data-tab="stations">Manage Stations</div>
-      <div class="tab" data-tab="users">Manage Users</div>
-    </div>
+  function updateTiles() {
+    const admins = state.users.filter((u) => u.role === 'admin').length;
+    main.querySelector('#cUsers').textContent = state.loaded.users ? `${state.users.length} users, ${admins} admin${admins === 1 ? '' : 's'}` : 'Loading';
+    main.querySelector('#cInv').textContent = state.loaded.stations ? `${state.stations.length} stations` : 'Loading';
+    main.querySelectorAll('#tabs .tile').forEach((t) => t.classList.toggle('on', t.dataset.t === state.tab));
+  }
+  main.querySelectorAll('#tabs .tile').forEach((t) => { t.onclick = () => { location.hash = t.dataset.t; }; });
+  const route = () => {
+    const h = location.hash.replace('#', '');
+    state.tab = ['users', 'inventory', 'message'].includes(h) ? h : 'users';
+    updateTiles();
+    ({ users: renderUsers, inventory: renderInventory, message: renderMessage })[state.tab]();
+  };
+  window.addEventListener('hashchange', route);
 
-    <!-- STATIONS SECTION -->
-    <div class="section active" id="stationsSection">
-      <div class="card">
-        <h2>Add New Station</h2>
-        <div class="form-row">
-          <div class="form-group">
-            <label>Area</label>
-            <select id="newArea"></select>
-          </div>
-          <div class="form-group">
-            <label>Station Name</label>
-            <input type="text" id="newName" placeholder="Station name">
-          </div>
-          <div class="form-group">
-            <label>Min</label>
-            <input type="number" id="newMin" placeholder="Min">
-          </div>
-          <div class="form-group">
-            <label>Max</label>
-            <input type="number" id="newMax" placeholder="Max">
-          </div>
-          <button class="btn btn-primary" id="addStationBtn">Add</button>
-        </div>
-      </div>
+  const errorBox = (e) => `<div class="empty"><b>Could not load data.</b><p>${esc(friendlyError(e))}</p></div>`;
 
-      <div class="card">
-        <h2>All Stations</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>Area</th>
-              <th>Station</th>
-              <th>Min</th>
-              <th>Max</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody id="stationsTable"></tbody>
-        </table>
-      </div>
-    </div>
+  async function load(which) {
+    try {
+      if (which === 'users') state.users = await listUsers();
+      else state.stations = await listStations();
+      state.loaded[which === 'users' ? 'users' : 'stations'] = true;
+      return null;
+    } catch (e) { return e; }
+  }
 
-    <!-- USERS SECTION -->
-    <div class="section" id="usersSection">
-      <div class="card">
-        <h2>Users & Area Access</h2>
-        <p style="font-size:13px; color:#64748b; margin-bottom:16px;">
-          Note: First create users from Firebase Authentication → Users → Add user. Then assign areas here.
-        </p>
-        <table>
-          <thead>
-            <tr>
-              <th>Email</th>
-              <th>Role</th>
-              <th>Allowed Areas</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody id="usersTable"></tbody>
-        </table>
-      </div>
-    </div>
-  </div>
+  /* ---------- Excel helpers ---------- */
+  let xlsxP;
+  const loadXLSX = () => xlsxP || (xlsxP = new Promise((res, rej) => {
+    if (window.XLSX) return res(window.XLSX);
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    s.onload = () => res(window.XLSX);
+    s.onerror = () => { xlsxP = null; rej(new Error('Could not load the Excel reader. Check your internet connection.')); };
+    document.head.appendChild(s);
+  }));
 
-  <script type="module">
-    import { 
-      checkAuth, logoutUser, getUserProfile, ALL_AREAS,
-      getAllStations, addStation, updateStation, deleteStation,
-      getAllUsers, updateUser
-    } from './js/firebase-config.js';
-
-    // Tabs
-    document.querySelectorAll('.tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
-        tab.classList.add('active');
-        document.getElementById(tab.dataset.tab + 'Section').classList.add('active');
-      });
+  function pickFile() {
+    return new Promise((resolve) => {
+      const inp = document.createElement('input');
+      inp.type = 'file'; inp.accept = '.xlsx,.xls,.xlsm';
+      inp.onchange = () => resolve(inp.files[0] || null);
+      inp.click();
     });
+  }
 
-    // Fill area dropdown
-    const areaSelect = document.getElementById('newArea');
-    areaSelect.innerHTML = ALL_AREAS.map(a => `<option value="${a}">${a}</option>`).join('');
-
-    checkAuth(async (user) => {
-      if (!user) {
-        window.location.href = "index.html";
-        return;
+  // Finds the sheet that has the wanted header and returns its rows with simplified keys
+  async function readSheet(file, mustHave) {
+    const X = await loadXLSX();
+    const wb = X.read(await file.arrayBuffer(), { type: 'array' });
+    for (const name of wb.SheetNames) {
+      const ws = wb.Sheets[name];
+      const head = (X.utils.sheet_to_json(ws, { header: 1, defval: '' })[0] || []).map(nk);
+      if (mustHave.every((k) => head.includes(k))) {
+        const rows = X.utils.sheet_to_json(ws, { defval: '' }).map((r) => {
+          const o = {}; Object.keys(r).forEach((k) => { o[nk(k)] = r[k]; }); return o;
+        });
+        return { sheet: name, rows };
       }
-
-      const profile = await getUserProfile(user.uid);
-      if (!profile || profile.role !== "admin") {
-        alert("Access denied. Only Admin can open this page.");
-        window.location.href = "home.html";
-        return;
-      }
-
-      loadStations();
-      loadUsers();
-    });
-
-    // ==================== STATIONS ====================
-    async function loadStations() {
-      const stations = await getAllStations();
-      const tbody = document.getElementById('stationsTable');
-
-      if (stations.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:30px;color:#64748b;">No stations yet. Add some above.</td></tr>`;
-        return;
-      }
-
-      // Sort by area
-      stations.sort((a, b) => a.area.localeCompare(b.area) || a.order - b.order);
-
-      tbody.innerHTML = stations.map(s => `
-        <tr>
-          <td>${s.area}</td>
-          <td>${s.name}</td>
-          <td>${s.min}</td>
-          <td>${s.max}</td>
-          <td>
-            <button class="btn btn-danger" onclick="deleteStationConfirm('${s.id}')">Delete</button>
-          </td>
-        </tr>
-      `).join('');
     }
+    throw new Error('Could not find the expected columns in this file.');
+  }
 
-    document.getElementById('addStationBtn').addEventListener('click', async () => {
-      const area = document.getElementById('newArea').value;
-      const name = document.getElementById('newName').value.trim();
-      const min = Number(document.getElementById('newMin').value);
-      const max = Number(document.getElementById('newMax').value);
+  /* ---------- Users ---------- */
+  const userSort = (a, b) => (a.userNo ?? 1e9) - (b.userNo ?? 1e9) || String(a.name).localeCompare(String(b.name));
 
-      if (!name || isNaN(min) || isNaN(max)) {
-        alert("Please fill all fields correctly");
-        return;
-      }
+  async function renderUsers() {
+    if (!state.loaded.users) {
+      panel.innerHTML = '<div class="empty">Loading users…</div>';
+      const e = await load('users');
+      updateTiles();
+      if (e) { panel.innerHTML = errorBox(e); return; }
+      if (state.tab !== 'users') return;
+    }
+    panel.innerHTML = `
+      <div class="toolbar">
+        <div class="search">${icon('search')}<input id="uq" type="search" placeholder="Search name or employee ID" aria-label="Search users"></div>
+        <select id="ud" aria-label="Filter by department"><option value="">All departments</option>${DEPARTMENTS.filter((d) => d !== 'All').map((d) => `<option>${esc(d)}</option>`).join('')}</select>
+        <select id="ur" aria-label="Filter by role"><option value="">All roles</option><option value="admin">Admin</option><option value="user">User</option></select>
+        <span style="flex:1"></span>
+        <button type="button" class="btn btn-ghost" id="uImp">${icon('upload')}<span>Import Excel</span></button>
+        <button type="button" class="btn btn-primary" id="uAdd">${icon('plus')}<span>Add user</span></button>
+      </div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr>
+        <th>No.</th><th>Employee name</th><th>User ID</th><th>Role</th><th>Access department 1</th><th>Access department 2</th><th>Status</th><th></th>
+      </tr></thead><tbody id="ub"></tbody></table></div>
+      <div class="note" id="uNote"></div>`;
+    const f = () => drawUsers();
+    panel.querySelector('#uq').oninput = f; panel.querySelector('#ud').onchange = f; panel.querySelector('#ur').onchange = f;
+    panel.querySelector('#uAdd').onclick = () => userDialog(null);
+    panel.querySelector('#uImp').onclick = importUsers;
+    drawUsers();
+  }
 
-      await addStation({
-        area,
-        name,
-        min,
-        max,
-        order: Date.now()
-      });
+  function drawUsers() {
+    const q = clean(panel.querySelector('#uq').value).toLowerCase();
+    const d = panel.querySelector('#ud').value, r = panel.querySelector('#ur').value;
+    const list = state.users.slice().sort(userSort).filter((u) =>
+      (!q || String(u.name).toLowerCase().includes(q) || String(u.employeeId).toLowerCase().includes(q)) &&
+      (!d || (u.departments || []).includes(d) || (u.departments || []).includes('All')) &&
+      (!r || u.role === r));
+    const tb = panel.querySelector('#ub');
+    tb.innerHTML = list.map((u, i) => {
+      const me = u.uid === ctx.uid, off = u.active === false;
+      return `<tr>
+        <td data-label="No.">${esc(u.userNo ?? i + 1)}</td>
+        <td data-label="Employee name"><b>${esc(u.name)}</b></td>
+        <td data-label="User ID">${esc(u.employeeId)}</td>
+        <td data-label="Role"><span class="badge ${u.role === 'admin' ? 'admin' : ''}">${u.role === 'admin' ? 'Admin' : 'User'}</span></td>
+        <td data-label="Department 1">${esc(u.departments?.[0] || '')}</td>
+        <td data-label="Department 2">${esc(u.departments?.[1] || '')}</td>
+        <td data-label="Status"><span class="badge ${off ? 'off' : ''}">${off ? 'Inactive' : 'Active'}</span></td>
+        <td class="acts-td"><div class="acts">
+          <button type="button" class="btn btn-ghost btn-sm" data-e="${esc(u.uid)}">${icon('edit')}<span>Edit</span></button>
+          ${me ? '' : `<button type="button" class="btn btn-sm ${off ? 'btn-ghost' : 'btn-danger'}" data-t="${esc(u.uid)}">${off ? 'Activate' : 'Deactivate'}</button>`}
+        </div></td></tr>`;
+    }).join('') || `<tr><td colspan="8"><div class="empty">${state.users.length ? 'No users match these filters.' : 'No users yet. Add one, or import your Excel file.'}</div></td></tr>`;
+    panel.querySelector('#uNote').textContent = `Showing ${list.length} of ${state.users.length} users`;
+    tb.querySelectorAll('[data-e]').forEach((b) => { b.onclick = () => userDialog(state.users.find((u) => u.uid === b.dataset.e)); });
+    tb.querySelectorAll('[data-t]').forEach((b) => { b.onclick = () => toggleUser(state.users.find((u) => u.uid === b.dataset.t)); });
+  }
 
-      document.getElementById('newName').value = '';
-      document.getElementById('newMin').value = '';
-      document.getElementById('newMax').value = '';
-
-      loadStations();
-      alert("Station added successfully!");
+  async function toggleUser(u) {
+    const off = u.active !== false;
+    const ok = await confirmBox({
+      title: off ? 'Deactivate user' : 'Activate user',
+      message: off ? `${u.name} will no longer be able to open the system. You can activate them again later.` : `${u.name} will be able to sign in again.`,
+      okLabel: off ? 'Deactivate' : 'Activate', danger: off
     });
+    if (!ok) return;
+    try { await updateUser(u.uid, { active: !off }); u.active = !off; drawUsers(); toast(off ? 'User deactivated.' : 'User activated.'); }
+    catch (e) { toast(friendlyError(e)); }
+  }
 
-    window.deleteStationConfirm = async (id) => {
-      if (confirm("Are you sure you want to delete this station?")) {
-        await deleteStation(id);
-        loadStations();
+  const genPw = () => { const c = 'abcdefghjkmnpqrstuvwxyz23456789'; let s = ''; const a = crypto.getRandomValues(new Uint32Array(8)); a.forEach((n) => { s += c[n % c.length]; }); return s; };
+
+  function userDialog(u) {
+    const edit = !!u, me = edit && u.uid === ctx.uid;
+    const d1 = u?.departments?.[0] || '', d2 = u?.departments?.[1] || '';
+    const m = openModal({
+      title: edit ? 'Edit user' : 'Add user',
+      html: `<form id="uf" class="fg" autocomplete="off">
+        <div class="full"><label class="l" for="f_name">Employee name</label><input id="f_name" value="${esc(u?.name || '')}"></div>
+        <div><label class="l" for="f_id">User ID (employee ID)</label><input id="f_id" value="${esc(u?.employeeId || '')}" ${edit ? 'disabled' : ''} inputmode="numeric"></div>
+        <div><label class="l" for="f_role">Role</label><select id="f_role" ${me ? 'disabled' : ''}><option value="user" ${u?.role !== 'admin' ? 'selected' : ''}>User</option><option value="admin" ${u?.role === 'admin' ? 'selected' : ''}>Admin</option></select>${me ? '<div class="hint">You cannot change your own role.</div>' : ''}</div>
+        ${edit ? '' : `<div class="full"><label class="l" for="f_pw">Starting password</label><div class="row"><input id="f_pw" type="text" autocomplete="off"><button type="button" class="btn btn-ghost" id="f_gen">Generate</button></div><div class="hint">Tell the user this password. They will be asked to change it after signing in.</div></div>`}
+        <div><label class="l" for="f_d1">Access department 1</label><select id="f_d1">${opts(DEPARTMENTS, d1)}</select></div>
+        <div><label class="l" for="f_d2">Access department 2</label><select id="f_d2">${opts(DEPARTMENTS.filter((d) => d !== 'All'), d2, 'None')}</select></div>
+      </form><div class="err" id="f_err"></div>`,
+      actions: [
+        { label: 'Cancel', onClick: (x) => x.close() },
+        { label: edit ? 'Save changes' : 'Add user', kind: 'primary', onClick: save }
+      ]
+    });
+    const $ = (id) => m.el.querySelector('#' + id);
+    $('f_gen')?.addEventListener('click', () => { $('f_pw').value = genPw(); });
+
+    async function save(x, btn) {
+      const name = clean($('f_name').value), id = clean($('f_id').value);
+      const role = $('f_role').value, a = $('f_d1').value, b = $('f_d2').value;
+      const departments = a === 'All' ? ['All'] : [...new Set([a, b].filter(Boolean))];
+      const err = $('f_err'); err.textContent = '';
+      if (!name) { err.textContent = 'Enter the employee name.'; return; }
+      if (!id || /\s/.test(id)) { err.textContent = 'Enter the user ID without spaces.'; return; }
+      if (!departments.length) { err.textContent = 'Choose at least one access department.'; return; }
+      btn.disabled = true; x.locked = true;
+      try {
+        if (edit) {
+          const data = { name, departments, ...(me ? {} : { role }) };
+          await updateUser(u.uid, data); Object.assign(u, data);
+        } else {
+          const password = $('f_pw').value;
+          if (password.length < 6) { err.textContent = 'The starting password needs at least 6 characters.'; btn.disabled = false; x.locked = false; return; }
+          if (state.users.some((z) => String(z.employeeId) === id)) { err.textContent = 'This user ID is already in the list.'; btn.disabled = false; x.locked = false; return; }
+          const nextNo = Math.max(0, ...state.users.map((z) => Number(z.userNo) || 0)) + 1;
+          state.users.push(await createUser({ employeeId: id, name, password, role, departments, userNo: nextNo }));
+        }
+        x.locked = false; x.close(); updateTiles(); drawUsers(); toast(edit ? 'Changes saved.' : 'User added.');
+      } catch (e) { err.textContent = friendlyError(e); btn.disabled = false; x.locked = false; }
+    }
+  }
+
+  async function importUsers() {
+    const file = await pickFile(); if (!file) return;
+    let parsed;
+    try { parsed = await readSheet(file, ['userid', 'employeename']); }
+    catch (e) { toast(e.message); return; }
+    const exist = new Set(state.users.map((u) => String(u.employeeId)));
+    const rows = parsed.rows.map((r, i) => ({
+      userNo: Number(r.userno) || i + 1, name: clean(r.employeename), employeeId: clean(r.userid),
+      password: String(r.userpassword ?? '').trim(), departments: [...new Set([fixDept(r.accessdepartment1), fixDept(r.accessdepartment2)].filter(Boolean))]
+    })).filter((r) => r.name || r.employeeId);
+    rows.forEach((r) => {
+      if (r.departments.includes('All')) r.departments = ['All'];
+      r.problem = !r.name ? 'Name missing' : !r.employeeId ? 'ID missing' : r.password.length < 6 ? 'Password under 6 characters'
+        : !r.departments.length ? 'Department missing' : exist.has(r.employeeId) ? 'Already added' : '';
+    });
+    const todo = rows.filter((r) => !r.problem), skipped = rows.filter((r) => r.problem);
+    const weak = todo.filter((r) => r.password === r.employeeId).length;
+
+    const m = openModal({
+      title: 'Import users', wide: true,
+      html: `<p>Found <b>${rows.length}</b> rows in sheet “${esc(parsed.sheet)}”: <b>${todo.length}</b> ready to create, <b>${skipped.length}</b> skipped.</p>
+        <p class="hint">The password column is used once to create each login. It is not saved in the database. Delete it from the Excel file afterwards.</p>
+        ${weak ? `<p class="hint"><b>${weak}</b> users have a password equal to their ID. They will be asked to change it at first sign-in. New users get the role User, and you can change that after the import.</p>` : ''}
+        ${skipped.length ? `<table class="sum"><tr><th>Skipped</th><th>User ID</th><th>Reason</th></tr>${skipped.slice(0, 12).map((r) => `<tr><td>${esc(r.name)}</td><td>${esc(r.employeeId)}</td><td>${esc(r.problem)}</td></tr>`).join('')}</table>` : ''}
+        <div class="prog" id="ip" hidden><i></i></div><div class="hint" id="it"></div><div class="err" id="ie"></div>`,
+      actions: [
+        { label: 'Cancel', id: 'cancel', onClick: (x) => x.close() },
+        { label: `Create ${todo.length} users`, kind: 'primary', id: 'go', onClick: run }
+      ]
+    });
+    if (!todo.length) m.buttons.go.disabled = true;
+
+    async function run(x, btn) {
+      x.locked = true; btn.disabled = true; x.buttons.cancel.disabled = true;
+      const bar = x.el.querySelector('#ip'), txt = x.el.querySelector('#it'); bar.hidden = false;
+      const fails = []; let ok = 0;
+      for (let i = 0; i < todo.length; i++) {
+        const r = todo[i];
+        txt.textContent = `Creating ${i + 1} of ${todo.length}: ${r.name}`;
+        try {
+          state.users.push(await createUser({ employeeId: r.employeeId, name: r.name, password: r.password, departments: r.departments, userNo: r.userNo }));
+          ok++;
+        } catch (e) { fails.push(`${r.name} (${r.employeeId}): ${friendlyError(e)}`); }
+        bar.firstElementChild.style.width = Math.round(((i + 1) / todo.length) * 100) + '%';
       }
+      x.locked = false; x.buttons.cancel.disabled = false; x.buttons.cancel.textContent = 'Close';
+      txt.textContent = `Done: ${ok} created, ${fails.length} failed.`;
+      if (fails.length) x.el.querySelector('#ie').innerHTML = fails.slice(0, 8).map(esc).join('<br>');
+      updateTiles(); drawUsers();
+    }
+  }
+
+  /* ---------- Inventory ---------- */
+  async function renderInventory() {
+    if (!state.loaded.stations) {
+      panel.innerHTML = '<div class="empty">Loading stations…</div>';
+      const e = await load('stations');
+      updateTiles();
+      if (e) { panel.innerHTML = errorBox(e); return; }
+      if (state.tab !== 'inventory') return;
+    }
+    const depts = [...new Set(state.stations.map((s) => s.department))];
+    panel.innerHTML = `
+      <div class="toolbar">
+        <div class="search">${icon('search')}<input id="sq" type="search" placeholder="Search station" aria-label="Search stations"></div>
+        <select id="sd" aria-label="Filter by department"><option value="">All departments</option>${depts.map((d) => `<option>${esc(d)}</option>`).join('')}</select>
+        <select id="sl" aria-label="Filter by line"><option value="">All lines</option></select>
+        <span style="flex:1"></span>
+        <button type="button" class="btn btn-ghost" id="sImp">${icon('upload')}<span>Import Excel</span></button>
+        <button type="button" class="btn btn-primary" id="sAdd">${icon('plus')}<span>Add station</span></button>
+      </div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr>
+        <th>Department</th><th>Line</th><th>Station code</th><th>Station name</th><th class="num">Min</th><th class="num">Max</th><th></th>
+      </tr></thead><tbody id="sb"></tbody></table></div>
+      <div class="note" id="sNote"></div>`;
+    const lines = () => {
+      const d = panel.querySelector('#sd').value, sel = panel.querySelector('#sl');
+      const ls = [...new Set(state.stations.filter((s) => !d || s.department === d).map((s) => s.line))];
+      sel.innerHTML = '<option value="">All lines</option>' + ls.map((l) => `<option>${esc(l)}</option>`).join('');
     };
+    panel.querySelector('#sq').oninput = drawStations;
+    panel.querySelector('#sd').onchange = () => { lines(); drawStations(); };
+    panel.querySelector('#sl').onchange = drawStations;
+    panel.querySelector('#sAdd').onclick = () => stationDialog(null);
+    panel.querySelector('#sImp').onclick = importStations;
+    drawStations();
+  }
 
-    // ==================== USERS ====================
-    async function loadUsers() {
-      const users = await getAllUsers();
-      const tbody = document.getElementById('usersTable');
+  function drawStations() {
+    const q = clean(panel.querySelector('#sq').value).toLowerCase();
+    const d = panel.querySelector('#sd').value, l = panel.querySelector('#sl').value;
+    const list = state.stations.filter((s) => (!d || s.department === d) && (!l || s.line === l) &&
+      (!q || `${s.stationName} ${s.stationCode} ${s.line}`.toLowerCase().includes(q)));
+    const tb = panel.querySelector('#sb');
+    tb.innerHTML = list.map((s) => `<tr>
+      <td data-label="Department">${esc(s.department)}</td><td data-label="Line">${esc(s.line)}</td>
+      <td data-label="Station code">${esc(s.stationCode || '')}</td><td data-label="Station name"><b>${esc(s.stationName)}</b></td>
+      <td class="num" data-label="Min">${esc(s.min)}</td><td class="num" data-label="Max">${esc(s.max)}</td>
+      <td class="acts-td"><div class="acts">
+        <button type="button" class="btn btn-ghost btn-sm" data-e="${esc(s.id)}">${icon('edit')}<span>Edit</span></button>
+        <button type="button" class="btn btn-danger btn-sm" data-d="${esc(s.id)}" aria-label="Delete ${esc(s.stationName)}">${icon('trash')}</button>
+      </div></td></tr>`).join('') ||
+      `<tr><td colspan="7"><div class="empty">${state.stations.length ? 'No stations match these filters.' : 'No stations yet. Add one, or import your Excel file.'}</div></td></tr>`;
+    panel.querySelector('#sNote').textContent = `Showing ${list.length} of ${state.stations.length} stations`;
+    tb.querySelectorAll('[data-e]').forEach((b) => { b.onclick = () => stationDialog(state.stations.find((s) => s.id === b.dataset.e)); });
+    tb.querySelectorAll('[data-d]').forEach((b) => { b.onclick = () => removeStation(state.stations.find((s) => s.id === b.dataset.d)); });
+  }
 
-      if (users.length === 0) {
+  async function removeStation(s) {
+    const ok = await confirmBox({ title: 'Delete station', message: `Delete “${s.stationName}” from ${s.line}? This cannot be undone.`, okLabel: 'Delete', danger: true });
+    if (!ok) return;
+    try { await deleteStation(s.id); state.stations = state.stations.filter((x) => x.id !== s.id); updateTiles(); drawStations(); toast('Station deleted.'); }
+    catch (e) { toast(friendlyError(e)); }
+  }
+
+  function stationDialog(s) {
+    const edit = !!s;
+    const dl = (id, vals) => `<datalist id="${id}">${[...new Set(vals)].map((v) => `<option value="${esc(v)}">`).join('')}</datalist>`;
+    const m = openModal({
+      title: edit ? 'Edit station' : 'Add station',
+      html: `<form class="fg" autocomplete="off">
+        <div><label class="l" for="s_d">Department</label><input id="s_d" list="dl_d" value="${esc(s?.department || '')}"></div>
+        <div><label class="l" for="s_l">Line</label><input id="s_l" list="dl_l" value="${esc(s?.line || '')}"></div>
+        <div><label class="l" for="s_c">Station code</label><input id="s_c" value="${esc(s?.stationCode || '')}"><div class="hint">Optional.</div></div>
+        <div><label class="l" for="s_n">Station name</label><input id="s_n" value="${esc(s?.stationName || '')}"></div>
+        <div><label class="l" for="s_min">Minimum</label><input id="s_min" type="number" min="0" step="1" value="${esc(s?.min ?? '')}"></div>
+        <div><label class="l" for="s_max">Maximum</label><input id="s_max" type="number" min="0" step="1" value="${esc(s?.max ?? '')}"></div>
+      </form>${dl('dl_d', state.stations.map((x) => x.department))}${dl('dl_l', state.stations.map((x) => x.line))}<div class="err" id="s_err"></div>`,
+      actions: [
+        { label: 'Cancel', onClick: (x) => x.close() },
+        { label: edit ? 'Save changes' : 'Add station', kind: 'primary', onClick: save }
+      ]
+    });
+    const $ = (id) => m.el.querySelector('#' + id);
+    async function save(x, btn) {
+      const data = {
+        department: clean($('s_d').value), line: clean($('s_l').value), stationCode: clean($('s_c').value),
+        stationName: clean($('s_n').value), min: Number($('s_min').value), max: Number($('s_max').value)
+      };
+      const err = $('s_err'); err.textContent = '';
+      if (!data.department || !data.line || !data.stationName) { err.textContent = 'Department, line and station name are required.'; return; }
+      if (!Number.isFinite(data.min) || !Number.isFinite(data.max) || $('s_min').value === '' || $('s_max').value === '' || data.min < 0 || data.max < 0) { err.textContent = 'Enter minimum and maximum as numbers, zero or more.'; return; }
+      if (data.min > data.max) { err.textContent = 'Minimum cannot be higher than maximum.'; return; }
+      const id = edit ? s.id : stationId(data);
+      if (!edit && state.stations.some((z) => z.id === id)) { err.textContent = 'This station already exists in that line.'; return; }
+      btn.disabled = true; x.locked = true;
+      try {
+        const order = edit ? s.order : Math.max(0, ...state.stations.map((z) => z.order ?? 0)) + 1;
+        await saveStation(id, { ...data, order });
+        if (edit) Object.assign(s, data); else state.stations.push({ id, ...data, order });
+        x.locked = false; x.close(); updateTiles(); renderInventory(); toast(edit ? 'Changes saved.' : 'Station added.');
+      } catch (e) { err.textContent = friendlyError(e); btn.disabled = false; x.locked = false; }
+    }
+  }
+
+  async function importStations() {
+    const file = await pickFile(); if (!file) return;
+    let parsed;
+    try { parsed = await readSheet(file, ['department', 'line', 'stationname', 'min', 'max']); }
+    catch (e) { toast(e.message); return; }
+    const used = new Set(), rows = [], bad = [];
+    parsed.rows.forEach((r, i) => {
+      const s = { department: clean(r.department), line: clean(r.line), stationCode: clean(r.stationcode), stationName: clean(r.stationname), min: Number(r.min), max: Number(r.max), order: i + 1 };
+      if (!s.department && !s.stationName) return;
+      if (!s.department || !s.line || !s.stationName) return bad.push([i + 2, 'Department, line or station name missing']);
+      if (!Number.isFinite(s.min) || !Number.isFinite(s.max) || r.min === '' || r.max === '') return bad.push([i + 2, 'Min or max is not a number']);
+      if (s.min > s.max) return bad.push([i + 2, 'Min is higher than max']);
+      let id = stationId(s), n = 2; const base = id;
+      while (used.has(id)) id = `${base}-${n++}`;
+      used.add(id); rows.push({ id, ...s });
+    });
+    const have = new Set(state.stations.map((s) => s.id));
+    const fresh = rows.filter((r) => !have.has(r.id)).length;
+    const byDept = {}; rows.forEach((r) => { byDept[r.department] = (byDept[r.department] || 0) + 1; });
+
+    const m = openModal({
+      title: 'Import inventory', wide: true,
+      html: `<p>Found <b>${rows.length}</b> stations in sheet “${esc(parsed.sheet)}”: <b>${fresh}</b> new, <b>${rows.length - fresh}</b> already in the database.</p>
+        <table class="sum"><tr><th>Department</th><th>Stations</th></tr>${Object.entries(byDept).map(([d, n]) => `<tr><td>${esc(d)}</td><td>${n}</td></tr>`).join('')}</table>
+        ${bad.length ? `<p class="hint"><b>${bad.length}</b> rows skipped: ${bad.slice(0, 5).map(([r, why]) => `row ${r} (${esc(why)})`).join(', ')}</p>` : ''}
+        <div style="margin-top:14px"><label style="display:block;margin-bottom:6px"><input type="radio" name="mode" value="merge" checked style="width:auto"> Add new stations and update existing ones</label>
+        <label style="display:block"><input type="radio" name="mode" value="replace" style="width:auto"> Replace everything, and remove stations that are not in the file</label></div>
+        <div class="prog" id="ip" hidden><i></i></div><div class="hint" id="it"></div><div class="err" id="ie"></div>`,
+      actions: [
+        { label: 'Cancel', id: 'cancel', onClick: (x) => x.close() },
+        { label: `Import ${rows.length} stations`, kind: 'primary', id: 'go', onClick: run }
+      ]
+    });
+    if (!rows.length) m.buttons.go.disabled = true;
+
+    async function run(x, btn) {
+      const replace = x.el.querySelector('input[name=mode]:checked').value === 'replace';
+      if (replace) {
+        const stale = state.stations.filter((s) => !used.has(s.id)).length;
+        const ok = await confirmBox({ title: 'Replace all stations', message: `${stale} stations that are not in the file will be deleted. Continue?`, okLabel: 'Replace', danger: true });
+        if (!ok) return;
+      }
+      x.locked = true; btn.disabled = true; x.buttons.cancel.disabled = true;
+      const bar = x.el.querySelector('#ip'), txt = x.el.querySelector('#it'); bar.hidden = false;
+      try {
+        await writeStations(rows, { replace, onProgress: (a, b) => { bar.firstElementChild.style.width = Math.round((a / b) * 100) + '%'; txt.textContent = `Saved ${a} of ${b}`; } });
+        state.stations = await listStations();
+        txt.textContent = `Done: ${rows.length} stations imported.`;
+        updateTiles(); if (state.tab === 'inventory') renderInventory();
+      } catch (e) { x.el.querySelector('#ie').textContent = friendlyError(e); }
+      x.locked = false; x.buttons.cancel.disabled = false; x.buttons.cancel.textContent = 'Close';
+    }
+  }
+
+  /* ---------- Admin message ---------- */
+  async function renderMessage() {
+    panel.innerHTML = '<div class="empty">Loading…</div>';
+    state.message = await getAdminMessage();
+    if (state.tab !== 'message') return;
+    const when = state.message?.updatedAt?.toDate?.();
+    panel.innerHTML = `<div style="padding:18px 16px">
+      <label class="l" for="mt">Message shown in the Admin message box on Home</label>
+      <textarea id="mt" rows="14"></textarea>
+      <div class="hint">${when ? 'Last saved ' + esc(when.toLocaleString('en-IN')) : 'Showing the default text until you save.'}</div>
+      <div class="row" style="margin-top:14px;justify-content:flex-end">
+        <button type="button" class="btn btn-ghost" id="mReset">Restore default text</button>
+        <button type="button" class="btn btn-primary" id="mSave">Save message</button></div></div>`;
+    const ta = panel.querySelector('#mt');
+    ta.value = state.message?.text || DEFAULT_ADMIN_MESSAGE;
+    panel.querySelector('#mReset').onclick = () => { ta.value = DEFAULT_ADMIN_MESSAGE; };
+    panel.querySelector('#mSave').onclick = async (ev) => {
+      const b = ev.currentTarget; b.disabled = true;
+      try { await setAdminMessage(ta.value.trim() || DEFAULT_ADMIN_MESSAGE, ctx.name); toast('Message saved.'); renderMessage(); }
+      catch (e) { toast(friendlyError(e)); b.disabled = false; }
+    };
+  }
+
+  // Load counts for both tiles in the background, then show the chosen tab
+  load('users').then(updateTiles);
+  load('stations').then(updateTiles);
+  route();
+</script>
+</body>
+</html>

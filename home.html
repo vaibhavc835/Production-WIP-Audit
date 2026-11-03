@@ -3,156 +3,113 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0b1220">
   <title>Home | Production WIP Audit</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', system-ui, sans-serif; }
-    body { background: #f1f5f9; min-height: 100vh; }
-    header {
-      background: #0f172a;
-      color: white;
-      padding: 16px 24px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    header h1 { font-size: 18px; font-weight: 600; }
-    .user-info { font-size: 13px; opacity: 0.85; }
-    .logout-btn {
-      background: #334155;
-      color: white;
-      border: none;
-      padding: 7px 14px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 13px;
-      margin-left: 12px;
-    }
-    .logout-btn:hover { background: #475569; }
-    .container { max-width: 1100px; margin: 30px auto; padding: 0 20px; }
-    .welcome { margin-bottom: 24px; }
-    .welcome h2 { font-size: 22px; color: #0f172a; }
-    .welcome p { color: #64748b; font-size: 14px; margin-top: 4px; }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-      gap: 16px;
-    }
-    .card {
-      background: white;
-      border-radius: 12px;
-      padding: 22px 18px;
-      text-align: center;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-      cursor: pointer;
-      transition: 0.2s;
-      border: 1px solid #e2e8f0;
-    }
-    .card:hover {
-      transform: translateY(-3px);
-      box-shadow: 0 8px 20px rgba(0,0,0,0.1);
-      border-color: #3b82f6;
-    }
-    .card h3 { font-size: 15px; color: #0f172a; margin-bottom: 6px; }
-    .card p { font-size: 12px; color: #64748b; }
-    .admin-link {
-      display: inline-block;
-      margin-top: 30px;
-      background: #2563eb;
-      color: white;
-      padding: 10px 20px;
-      border-radius: 8px;
-      text-decoration: none;
-      font-size: 14px;
-      font-weight: 500;
-    }
-    .admin-link:hover { background: #1d4ed8; }
-    .no-access {
-      background: white;
-      padding: 40px;
-      border-radius: 12px;
-      text-align: center;
-      color: #64748b;
-    }
-  </style>
 </head>
 <body>
+<script type="module">
+  import {
+    startPage, NAV, go, icon, esc, toast, openModal, openProfile,
+    startNetwork, getAdminMessage, DEFAULT_ADMIN_MESSAGE
+  } from './js/wip-core.js';
 
-  <header>
-    <h1>Production WIP Audit</h1>
-    <div>
-      <span class="user-info" id="userEmail">Loading...</span>
-      <button class="logout-btn" id="logoutBtn">Logout</button>
-    </div>
-  </header>
+  const ctx = await startPage({ active: 'home', title: 'Home' });
+  const main = ctx.main;
 
-  <div class="container">
-    <div class="welcome">
-      <h2>Select Area</h2>
-      <p>Choose the area you want to view</p>
-    </div>
+  // Tiles, in the order of the design sheet (3 x 3)
+  const TILE_KEYS = ['inventory', 'issue', 'improvement', 'multiskilling', 'shift', 'audit', 'inspection', 'psm', 'm5'];
+  const tiles = TILE_KEYS.map((k) => NAV.find((n) => n.key === k));
 
-    <div class="grid" id="areaGrid">
-      <!-- Areas will load here -->
-    </div>
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+  const today = new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const access = ctx.departments.length ? ctx.departments : [];
 
-    <div id="adminSection" style="display:none; text-align:center;">
-      <a href="admin.html" class="admin-link">Go to Admin Panel</a>
-    </div>
-  </div>
-
-  <script type="module">
-    import { checkAuth, logoutUser, getUserProfile, ALL_AREAS } from './js/firebase-config.js';
-
-    const areaGrid = document.getElementById("areaGrid");
-    const userEmail = document.getElementById("userEmail");
-    const adminSection = document.getElementById("adminSection");
-
-    checkAuth(async (user) => {
-      if (!user) {
-        window.location.href = "index.html";
-        return;
-      }
-
-      userEmail.textContent = user.email;
-
-      const profile = await getUserProfile(user.uid);
-
-      if (!profile) {
-        areaGrid.innerHTML = `<div class="no-access">Your account is not fully set up. Contact Admin.</div>`;
-        return;
-      }
-
-      // Show Admin button if user is admin
-      if (profile.role === "admin") {
-        adminSection.style.display = "block";
-      }
-
-      // Get allowed areas
-      let areasToShow = [];
-      if (profile.role === "admin") {
-        areasToShow = ALL_AREAS; // Admin sees all
-      } else {
-        areasToShow = profile.allowedAreas || [];
-      }
-
-      if (areasToShow.length === 0) {
-        areaGrid.innerHTML = `<div class="no-access">No areas assigned to you.<br>Please contact Admin.</div>`;
-        return;
-      }
-
-      // Create cards
-      areaGrid.innerHTML = areasToShow.map(area => `
-        <div class="card" onclick="window.location.href='dashboard.html?area=${encodeURIComponent(area)}'">
-          <h3>${area}</h3>
-          <p>View Dashboard</p>
+  main.innerHTML = `
+    <section class="band">
+      <canvas aria-hidden="true"></canvas>
+      <div>
+        <h2>${greeting}, ${esc(ctx.name.split(/\s+/)[0])}</h2>
+        <p>Pick a module below to continue.</p>
+        <div class="chips">
+          <span class="chip">${ctx.isAdmin ? 'Administrator' : 'User'}</span>
+          ${access.map((d) => `<span class="chip">${esc(d)}</span>`).join('')}
         </div>
-      `).join('');
-    });
+      </div>
+      <div class="date">${esc(today)}</div>
+    </section>
 
-    document.getElementById("logoutBtn").addEventListener("click", async () => {
-      await logoutUser();
-      window.location.href = "index.html";
-    });
-  </script>
+    ${ctx.profile.mustChangePassword ? `
+    <div class="alert" id="pwBanner">
+      <span>You are using a starting password. Please set your own password.</span>
+      <button type="button" class="btn btn-primary btn-sm" id="pwBtn">Change password</button>
+    </div>` : ''}
+
+    <section class="tiles" aria-label="Modules">
+      ${tiles.map((t) => `
+        <button type="button" class="tile" data-k="${t.key}">
+          <span class="ico">${icon(t.icon)}</span>
+          <span><b>${esc(t.label)}</b>${t.href ? '' : '<small>Coming soon</small>'}</span>
+        </button>`).join('')}
+    </section>
+
+    <section class="lower">
+      <article class="card msg">
+        <h2>Admin message</h2>
+        <div class="msg-body" id="msgBody"></div>
+        <div class="msg-meta" id="msgMeta"></div>
+      </article>
+      <article class="card core">
+        <h2>HDPS core values</h2>
+        <div class="core-img"><img src="images/logo.png" alt="HD Hyundai core values: built in quality, just in time, operational stability, continuous improvement, team HD Hyundai, around customer satisfaction" onerror="this.parentElement.innerHTML='<p class=hint>Add images/logo.png to show the core values.</p>'"></div>
+      </article>
+    </section>
+
+    <footer class="foot">
+      <div>
+        <button type="button" data-p="cookies">Cookies Policy</button>
+        <button type="button" data-p="cookie-settings">Cookie Settings</button>
+        <button type="button" data-p="legal">Legal Terms</button>
+        <button type="button" data-p="privacy">Privacy Policy</button>
+      </div>
+      <div>
+        <b>Connect:</b>
+        <span>Production Innovation</span>
+        <span>Vaibhav Chaudhari</span>
+        <a href="tel:8956954726">8956954726</a>
+      </div>
+    </footer>`;
+
+  startNetwork(main.querySelector('.band canvas'));
+
+  main.querySelectorAll('.tile').forEach((el) => {
+    el.onclick = () => go(ctx, NAV.find((n) => n.key === el.dataset.k));
+  });
+  main.querySelector('#pwBtn')?.addEventListener('click', () => openProfile(ctx));
+
+  // Admin message: saved by an administrator, falls back to the default text
+  const msgBody = main.querySelector('#msgBody'), msgMeta = main.querySelector('#msgMeta');
+  msgBody.textContent = DEFAULT_ADMIN_MESSAGE;
+  getAdminMessage().then((m) => {
+    if (!m?.text) return;
+    msgBody.textContent = m.text;
+    const when = m.updatedAt?.toDate?.();
+    if (when) msgMeta.textContent = 'Updated ' + when.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+  });
+
+  // Footer pages (draft wording: replace with text approved by your company)
+  const POLICIES = {
+    cookies: ['Cookies policy', '<p>This site does not use advertising or tracking cookies.</p><p>It stores only what is needed to keep you signed in. This storage is removed when you sign out.</p>'],
+    'cookie-settings': ['Cookie settings', '<p>Only essential storage is used, so there is nothing to switch on or off.</p><p>To clear it, use <b>Sign out</b>.</p>'],
+    legal: ['Legal terms', '<p>This system is for authorized employees only. Access is monitored and each action is linked to your employee ID.</p><p>Data shown here is confidential company information. Do not copy, share or forward it without permission.</p>'],
+    privacy: ['Privacy policy', '<p>The system keeps your name, employee ID, department access and your activity inside the audit modules.</p><p>This information is used only for plant operations and is visible to authorized administrators.</p>']
+  };
+  main.querySelectorAll('[data-p]').forEach((b) => {
+    b.onclick = () => {
+      const [title, html] = POLICIES[b.dataset.p];
+      openModal({ title, html: html + '<p class="hint">Draft wording. Replace with company-approved text.</p>', actions: [{ label: 'Close', onClick: (m) => m.close() }] });
+    };
+  });
+</script>
 </body>
 </html>
