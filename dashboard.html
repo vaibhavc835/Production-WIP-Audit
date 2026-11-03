@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard | Production WIP Audit</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', system-ui, sans-serif; }
+    body { background: #f1f5f9; min-height: 100vh; }
+    header {
+      background: #0f172a;
+      color: white;
+      padding: 14px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    header h1 { font-size: 17px; }
+    .back-btn, .logout-btn {
+      background: #334155;
+      color: white;
+      border: none;
+      padding: 7px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      margin-left: 8px;
+    }
+    .back-btn:hover, .logout-btn:hover { background: #475569; }
+    .container { max-width: 1000px; margin: 30px auto; padding: 0 20px; }
+    .page-title { margin-bottom: 20px; }
+    .page-title h2 { font-size: 22px; color: #0f172a; }
+    .page-title p { color: #64748b; font-size: 14px; margin-top: 4px; }
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+      border: 1px solid #e2e8f0;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    th {
+      background: #f8fafc;
+      text-align: left;
+      padding: 12px 14px;
+      color: #475569;
+      font-weight: 600;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    td {
+      padding: 12px 14px;
+      border-bottom: 1px solid #f1f5f9;
+    }
+    .status {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .status.ok { background: #dcfce7; color: #166534; }
+    .status.high { background: #fee2e2; color: #991b1b; }
+    .status.low { background: #fef3c7; color: #92400e; }
+    .empty {
+      text-align: center;
+      padding: 40px;
+      color: #64748b;
+    }
+    .note {
+      margin-top: 16px;
+      font-size: 13px;
+      color: #64748b;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1 id="areaTitle">Loading...</h1>
+    <div>
+      <button class="back-btn" onclick="window.location.href='home.html'">← Back</button>
+      <button class="logout-btn" id="logoutBtn">Logout</button>
+    </div>
+  </header>
+
+  <div class="container">
+    <div class="page-title">
+      <h2 id="areaName">Area Dashboard</h2>
+      <p>Station-wise Min / Max WIP</p>
+    </div>
+
+    <div class="card">
+      <table>
+        <thead>
+          <tr>
+            <th>Station</th>
+            <th>Min</th>
+            <th>Max</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="stationTable">
+          <tr><td colspan="4" class="empty">Loading stations...</td></tr>
+        </tbody>
+      </table>
+      <p class="note">Note: Actual WIP quantity entry will be added in next version. Currently showing Min/Max setup.</p>
+    </div>
+  </div>
+
+  <script type="module">
+    import { checkAuth, logoutUser, getUserProfile, getStationsByArea } from './js/firebase-config.js';
+
+    // Get area from URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const area = urlParams.get('area');
+
+    if (!area) {
+      window.location.href = "home.html";
+    }
+
+    document.getElementById("areaTitle").textContent = area;
+    document.getElementById("areaName").textContent = area;
+
+    checkAuth(async (user) => {
+      if (!user) {
+        window.location.href = "index.html";
+        return;
+      }
+
+      const profile = await getUserProfile(user.uid);
+
+      // Security check: user must have access to this area
+      if (profile.role !== "admin") {
+        const allowed = profile.allowedAreas || [];
+        if (!allowed.includes(area)) {
+          alert("You do not have access to this area.");
+          window.location.href = "home.html";
+          return;
+        }
+      }
+
+      // Load stations
+      const stations = await getStationsByArea(area);
+      const tbody = document.getElementById("stationTable");
+
+      if (stations.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="4" class="empty">No stations added yet for this area.<br>Admin can add stations from Admin Panel.</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = stations.map(s => `
+        <tr>
+          <td>${s.name}</td>
+          <td>${s.min}</td>
+          <td>${s.max}</td>
+          <td><span class="status ok">Configured</span></td>
+        </tr>
+      `).join('');
+    });
+
+    document.getElementById("logoutBtn").addEventListener("click", async () => {
+      await logoutUser();
+      window.location.href = "index.html";
+    });
+  </script>
+</body>
+</html>
