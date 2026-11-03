@@ -3,48 +3,174 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0b1220">
   <title>Login | Production WIP Audit</title>
   <style>
+    :root {
+      --green: #16a34a;
+      --green-dark: #047857;
+      --navy: #0b1220;
+      --navy-2: #12304f;
+      --text: #0f172a;
+      --muted: #64748b;
+      --border: #cbd5e1;
+    }
+
     * {
       margin: 0;
       padding: 0;
       box-sizing: border-box;
-      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-family: 'Segoe UI', system-ui, -apple-system, Roboto, sans-serif;
+    }
+
+    html, body {
+      min-height: 100%;
     }
 
     body {
-      background: linear-gradient(135deg, #0f172a, #1e3a5f);
       min-height: 100vh;
+      min-height: 100dvh;
+      color: #fff;
+      position: relative;
+      overflow-x: hidden;
+      /* Optional photo: save your own image as images/background.jpg.
+         If the file is missing, the gradient below is shown instead. */
+      background:
+        linear-gradient(135deg, rgba(11,18,32,0.88), rgba(18,48,79,0.82)),
+        url('images/background.jpg') center / cover no-repeat fixed,
+        linear-gradient(135deg, var(--navy), var(--navy-2));
+    }
+
+    /* Animated digital network background */
+    #bg {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    /* Faint grid */
+    .grid {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px);
+      background-size: 44px 44px;
+      mask-image: radial-gradient(ellipse at center, #000 30%, transparent 85%);
+      -webkit-mask-image: radial-gradient(ellipse at center, #000 30%, transparent 85%);
+    }
+
+    .page {
+      position: relative;
+      z-index: 1;
+      min-height: 100vh;
+      min-height: 100dvh;
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 20px;
+      gap: 64px;
+      padding: 24px;
+      max-width: 1200px;
+      margin: 0 auto;
     }
 
-    .login-card {
-      background: white;
-      width: 100%;
-      max-width: 420px;
-      border-radius: 16px;
-      padding: 40px 36px;
-      box-shadow: 0 20px 50px rgba(0,0,0,0.3);
+    /* Left hero (brand) */
+    .hero {
+      flex: 1 1 0;
+      max-width: 520px;
     }
 
-    .logo {
-      text-align: center;
+    .logo-badge {
+      width: 150px;
+      height: 150px;
+      background: #fff;
+      border-radius: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 10px;
+      box-shadow: 0 16px 40px rgba(0,0,0,0.35);
       margin-bottom: 28px;
     }
 
-    .logo h1 {
-      font-size: 22px;
-      color: #0f172a;
-      font-weight: 700;
+    .logo-badge img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      display: block;
     }
 
-    .logo p {
-      font-size: 13px;
-      color: #64748b;
+    .hero h1 {
+      font-size: clamp(28px, 4vw, 44px);
+      line-height: 1.15;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+    }
+
+    .hero h1 span {
+      color: #4ade80;
+    }
+
+    .hero p {
+      margin-top: 14px;
+      font-size: 16px;
+      line-height: 1.6;
+      color: #cbd5e1;
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 22px;
+    }
+
+    .chip {
+      font-size: 12px;
+      font-weight: 600;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.18);
+      color: #e2e8f0;
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+    }
+
+    /* Login card */
+    .login-card {
+      flex: 0 0 auto;
+      width: 100%;
+      max-width: 420px;
+      background: #fff;
+      color: var(--text);
+      border-radius: 20px;
+      padding: 40px 36px;
+      box-shadow: 0 24px 60px rgba(0,0,0,0.45);
+      animation: rise 0.6s ease both;
+    }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(18px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .card-head h2 {
+      font-size: 24px;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .card-head p {
+      font-size: 14px;
+      color: var(--muted);
       margin-top: 6px;
+      margin-bottom: 26px;
     }
 
     .input-group {
@@ -59,42 +185,77 @@
       margin-bottom: 6px;
     }
 
+    .field {
+      position: relative;
+    }
+
     .input-group input {
       width: 100%;
-      padding: 12px 14px;
-      border: 1px solid #cbd5e1;
-      border-radius: 8px;
-      font-size: 15px;
+      padding: 13px 14px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      font-size: 16px; /* 16px stops iPhone auto-zoom */
       outline: none;
       transition: 0.2s;
+      background: #fff;
+      color: var(--text);
+    }
+
+    .field input[type="password"],
+    .field input[type="text"].pw {
+      padding-right: 70px;
     }
 
     .input-group input:focus {
-      border-color: #3b82f6;
-      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+      border-color: var(--green);
+      box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.18);
     }
 
-    button {
-      width: 100%;
-      padding: 13px;
-      background: #2563eb;
-      color: white;
-      border: none;
-      border-radius: 8px;
-      font-size: 15px;
+    .toggle-pw {
+      position: absolute;
+      right: 6px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: auto;
+      margin: 0;
+      padding: 8px 10px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
       font-weight: 600;
+      border-radius: 8px;
+    }
+
+    .toggle-pw:hover {
+      background: #f1f5f9;
+      color: var(--text);
+    }
+
+    #loginBtn {
+      width: 100%;
+      padding: 14px;
+      background: linear-gradient(135deg, var(--green), var(--green-dark));
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      font-size: 16px;
+      font-weight: 700;
       cursor: pointer;
       transition: 0.2s;
       margin-top: 8px;
+      box-shadow: 0 8px 20px rgba(22, 163, 74, 0.35);
     }
 
-    button:hover {
-      background: #1d4ed8;
+    #loginBtn:hover {
+      filter: brightness(1.08);
+      transform: translateY(-1px);
     }
 
-    button:disabled {
+    #loginBtn:disabled {
       background: #94a3b8;
+      box-shadow: none;
       cursor: not-allowed;
+      transform: none;
     }
 
     #errorMsg {
@@ -109,33 +270,124 @@
       text-align: center;
       margin-top: 14px;
       font-size: 13px;
-      color: #64748b;
+      color: var(--muted);
       display: none;
+    }
+
+    .foot {
+      margin-top: 24px;
+      text-align: center;
+      font-size: 12px;
+      color: #94a3b8;
+    }
+
+    /* Tablet and mobile */
+    @media (max-width: 900px) {
+      .page {
+        flex-direction: column;
+        justify-content: center;
+        gap: 24px;
+        padding: 28px 18px;
+      }
+
+      .hero {
+        max-width: 420px;
+        width: 100%;
+        text-align: center;
+      }
+
+      .logo-badge {
+        width: 110px;
+        height: 110px;
+        border-radius: 20px;
+        margin: 0 auto 18px;
+      }
+
+      .hero p {
+        font-size: 14px;
+        margin-top: 10px;
+      }
+
+      .chips {
+        justify-content: center;
+        margin-top: 16px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .login-card {
+        padding: 30px 22px;
+        border-radius: 18px;
+      }
+
+      .chips {
+        display: none;
+      }
+    }
+
+    @media (max-height: 640px) and (max-width: 900px) {
+      .hero p, .chips {
+        display: none;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .login-card { animation: none; }
     }
   </style>
 </head>
 <body>
 
-  <div class="login-card">
-    <div class="logo">
-      <h1>Production WIP Audit</h1>
-      <p>Sign in to continue</p>
-    </div>
+  <canvas id="bg"></canvas>
+  <div class="grid"></div>
 
-    <div class="input-group">
-      <label>Email</label>
-      <input type="email" id="email" placeholder="Enter your email" autocomplete="email">
-    </div>
+  <div class="page">
 
-    <div class="input-group">
-      <label>Password</label>
-      <input type="password" id="password" placeholder="Enter password" autocomplete="current-password">
-    </div>
+    <!-- Brand / hero -->
+    <section class="hero">
+      <div class="logo-badge">
+        <!-- Save your logo as images/logo.png -->
+        <img src="images/logo.png" alt="Company logo" onerror="this.style.display='none'">
+      </div>
+      <h1>Production <span>WIP Audit</span></h1>
+      <p>Moving from paper to digital. Track work in progress, audit the shop floor and see results in real time, from any device.</p>
+      <div class="chips">
+        <span class="chip">Digital Audit</span>
+        <span class="chip">Real-time Data</span>
+        <span class="chip">Mobile Ready</span>
+      </div>
+    </section>
 
-    <button id="loginBtn">Login</button>
+    <!-- Login card -->
+    <section class="login-card">
+      <div class="card-head">
+        <h2>Welcome back</h2>
+        <p>Sign in to continue</p>
+      </div>
 
-    <div id="errorMsg"></div>
-    <div id="loading">Please wait...</div>
+      <div class="input-group">
+        <label for="email">Email</label>
+        <div class="field">
+          <input type="email" id="email" placeholder="Enter your email" autocomplete="email" inputmode="email">
+        </div>
+      </div>
+
+      <div class="input-group">
+        <label for="password">Password</label>
+        <div class="field">
+          <input type="password" id="password" placeholder="Enter password" autocomplete="current-password">
+          <button type="button" class="toggle-pw" id="togglePw" aria-label="Show or hide password">Show</button>
+        </div>
+      </div>
+
+      <button id="loginBtn">Login</button>
+
+      <div id="errorMsg"></div>
+      <div id="loading">Please wait...</div>
+
+      <div class="foot">Authorised users only</div>
+    </section>
+
   </div>
 
   <script type="module">
@@ -151,10 +403,12 @@
     const loginBtn = document.getElementById("loginBtn");
     const errorMsg = document.getElementById("errorMsg");
     const loading = document.getElementById("loading");
+    const pwInput = document.getElementById("password");
+    const togglePw = document.getElementById("togglePw");
 
     loginBtn.addEventListener("click", async () => {
       const email = document.getElementById("email").value.trim();
-      const password = document.getElementById("password").value;
+      const password = pwInput.value;
 
       if (!email || !password) {
         showError("Please enter email and password");
@@ -178,14 +432,119 @@
     });
 
     // Allow Enter key to login
-    document.getElementById("password").addEventListener("keypress", (e) => {
+    pwInput.addEventListener("keypress", (e) => {
       if (e.key === "Enter") loginBtn.click();
+    });
+
+    // Show / hide password
+    togglePw.addEventListener("click", () => {
+      const show = pwInput.type === "password";
+      pwInput.type = show ? "text" : "password";
+      togglePw.textContent = show ? "Hide" : "Show";
     });
 
     function showError(msg) {
       errorMsg.innerText = msg;
       errorMsg.style.display = "block";
     }
+  </script>
+
+  <!-- Digital background animation: connected nodes + floating 0/1 digits -->
+  <script>
+    (function () {
+      const canvas = document.getElementById('bg');
+      const ctx = canvas.getContext('2d');
+      const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      let w, h, dpr, nodes = [], bits = [];
+
+      function resize() {
+        dpr = Math.min(window.devicePixelRatio || 1, 2);
+        w = window.innerWidth;
+        h = window.innerHeight;
+        canvas.width = w * dpr;
+        canvas.height = h * dpr;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        init();
+      }
+
+      function init() {
+        const small = w < 700;
+        const nodeCount = small ? 35 : 80;
+        const bitCount = small ? 22 : 50;
+
+        nodes = Array.from({ length: nodeCount }, () => ({
+          x: Math.random() * w,
+          y: Math.random() * h,
+          vx: (Math.random() - 0.5) * 0.35,
+          vy: (Math.random() - 0.5) * 0.35,
+          r: Math.random() * 1.6 + 0.8
+        }));
+
+        bits = Array.from({ length: bitCount }, () => ({
+          x: Math.random() * w,
+          y: Math.random() * h,
+          v: Math.random() * 0.5 + 0.2,
+          s: Math.random() * 10 + 10,
+          c: Math.random() > 0.5 ? '1' : '0',
+          a: Math.random() * 0.18 + 0.05
+        }));
+      }
+
+      function draw() {
+        ctx.clearRect(0, 0, w, h);
+
+        // floating binary digits
+        for (const b of bits) {
+          ctx.font = b.s + 'px monospace';
+          ctx.fillStyle = 'rgba(74, 222, 128,' + b.a + ')';
+          ctx.fillText(b.c, b.x, b.y);
+          if (!reduce) {
+            b.y -= b.v;
+            if (b.y < -20) {
+              b.y = h + 20;
+              b.x = Math.random() * w;
+              b.c = Math.random() > 0.5 ? '1' : '0';
+            }
+          }
+        }
+
+        // network nodes and lines
+        const maxDist = w < 700 ? 110 : 150;
+        for (let i = 0; i < nodes.length; i++) {
+          const n = nodes[i];
+          if (!reduce) {
+            n.x += n.vx;
+            n.y += n.vy;
+            if (n.x < 0 || n.x > w) n.vx *= -1;
+            if (n.y < 0 || n.y > h) n.vy *= -1;
+          }
+          ctx.beginPath();
+          ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(147, 197, 253, 0.8)';
+          ctx.fill();
+
+          for (let j = i + 1; j < nodes.length; j++) {
+            const m = nodes[j];
+            const dx = n.x - m.x, dy = n.y - m.y;
+            const d = Math.sqrt(dx * dx + dy * dy);
+            if (d < maxDist) {
+              ctx.beginPath();
+              ctx.moveTo(n.x, n.y);
+              ctx.lineTo(m.x, m.y);
+              ctx.strokeStyle = 'rgba(96, 165, 250,' + (0.28 * (1 - d / maxDist)) + ')';
+              ctx.lineWidth = 1;
+              ctx.stroke();
+            }
+          }
+        }
+
+        if (!reduce) requestAnimationFrame(draw);
+      }
+
+      window.addEventListener('resize', resize);
+      resize();
+      draw();
+    })();
   </script>
 </body>
 </html>
