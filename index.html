@@ -73,16 +73,26 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 64px;
       padding: 24px;
+    }
+
+    /* Hero and card sit side by side and share the same height */
+    .layout {
+      display: flex;
+      align-items: stretch;
+      justify-content: center;
+      gap: 64px;
+      width: 100%;
       max-width: 1200px;
-      margin: 0 auto;
     }
 
     /* Left hero (brand) */
     .hero {
       flex: 1 1 0;
       max-width: 520px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
     }
 
     .logo-badge {
@@ -143,17 +153,20 @@
       -webkit-backdrop-filter: blur(4px);
     }
 
-    /* Login card */
+    /* Login card: stretches to the full height of the hero */
     .login-card {
       flex: 0 0 auto;
       width: 100%;
-      max-width: 420px;
+      max-width: 440px;
       background: #fff;
       color: var(--text);
       border-radius: 20px;
-      padding: 40px 36px;
+      padding: 48px 40px;
       box-shadow: 0 24px 60px rgba(0,0,0,0.45);
       animation: rise 0.6s ease both;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
     }
 
     @keyframes rise {
@@ -162,7 +175,7 @@
     }
 
     .card-head h2 {
-      font-size: 24px;
+      font-size: 28px;
       font-weight: 700;
       color: var(--text);
     }
@@ -171,11 +184,11 @@
       font-size: 14px;
       color: var(--muted);
       margin-top: 6px;
-      margin-bottom: 26px;
+      margin-bottom: 32px;
     }
 
     .input-group {
-      margin-bottom: 18px;
+      margin-bottom: 22px;
     }
 
     .input-group label {
@@ -192,7 +205,7 @@
 
     .input-group input {
       width: 100%;
-      padding: 13px 14px;
+      padding: 14px 14px;
       border: 1px solid var(--border);
       border-radius: 10px;
       font-size: 16px; /* 16px stops iPhone auto-zoom */
@@ -221,10 +234,12 @@
       margin: 0;
       padding: 8px 10px;
       background: transparent;
+      border: none;
       color: var(--muted);
       font-size: 12px;
       font-weight: 600;
       border-radius: 8px;
+      cursor: pointer;
     }
 
     .toggle-pw:hover {
@@ -234,7 +249,7 @@
 
     #loginBtn {
       width: 100%;
-      padding: 14px;
+      padding: 15px;
       background: linear-gradient(135deg, var(--green), var(--green-dark));
       color: #fff;
       border: none;
@@ -243,7 +258,7 @@
       font-weight: 700;
       cursor: pointer;
       transition: 0.2s;
-      margin-top: 8px;
+      margin-top: 10px;
       box-shadow: 0 8px 20px rgba(22, 163, 74, 0.35);
     }
 
@@ -276,7 +291,7 @@
     }
 
     .foot {
-      margin-top: 24px;
+      margin-top: 28px;
       text-align: center;
       font-size: 12px;
       color: #94a3b8;
@@ -285,10 +300,13 @@
     /* Tablet and mobile */
     @media (max-width: 900px) {
       .page {
-        flex-direction: column;
-        justify-content: center;
-        gap: 24px;
         padding: 28px 18px;
+      }
+
+      .layout {
+        flex-direction: column;
+        align-items: center;
+        gap: 24px;
       }
 
       .hero {
@@ -312,6 +330,11 @@
       .chips {
         justify-content: center;
         margin-top: 16px;
+      }
+
+      .login-card {
+        max-width: 420px;
+        padding: 36px 28px;
       }
     }
 
@@ -343,56 +366,62 @@
   <div class="grid"></div>
 
   <div class="page">
+    <div class="layout">
 
-    <!-- Brand / hero -->
-    <section class="hero">
-      <div class="logo-badge">
-        <!-- Save your logo as images/logo.png -->
-        <img src="images/logo.png" alt="Company logo" onerror="this.style.display='none'">
-      </div>
-      <h1>Production <span>WIP Audit</span></h1>
-      <p>Moving from paper to digital. Track work in progress, audit the shop floor and see results in real time, from any device.</p>
-      <div class="chips">
-        <span class="chip">Digital Audit</span>
-        <span class="chip">Real-time Data</span>
-        <span class="chip">Mobile Ready</span>
-      </div>
-    </section>
-
-    <!-- Login card -->
-    <section class="login-card">
-      <div class="card-head">
-        <h2>Welcome back</h2>
-        <p>Sign in to continue</p>
-      </div>
-
-      <div class="input-group">
-        <label for="email">Email</label>
-        <div class="field">
-          <input type="email" id="email" placeholder="Enter your email" autocomplete="email" inputmode="email">
+      <!-- Brand / hero -->
+      <section class="hero">
+        <div class="logo-badge">
+          <!-- Save your logo as images/logo.png -->
+          <img src="images/logo.png" alt="Company logo" onerror="this.style.display='none'">
         </div>
-      </div>
-
-      <div class="input-group">
-        <label for="password">Password</label>
-        <div class="field">
-          <input type="password" id="password" placeholder="Enter password" autocomplete="current-password">
-          <button type="button" class="toggle-pw" id="togglePw" aria-label="Show or hide password">Show</button>
+        <h1>Production <span>WIP Audit</span></h1>
+        <p>Moving from paper to digital. Track work in progress, audit the shop floor and see results in real time, from any device.</p>
+        <div class="chips">
+          <span class="chip">Digital Audit</span>
+          <span class="chip">Real-time Data</span>
+          <span class="chip">Mobile Ready</span>
         </div>
-      </div>
+      </section>
 
-      <button id="loginBtn">Login</button>
+      <!-- Login card -->
+      <section class="login-card">
+        <div class="card-head">
+          <h2>Welcome back</h2>
+          <p>Sign in to continue</p>
+        </div>
 
-      <div id="errorMsg"></div>
-      <div id="loading">Please wait...</div>
+        <div class="input-group">
+          <label for="email">Email / Employee ID</label>
+          <div class="field">
+            <input type="text" id="email" placeholder="Enter email or employee ID" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false">
+          </div>
+        </div>
 
-      <div class="foot">Authorised users only</div>
-    </section>
+        <div class="input-group">
+          <label for="password">Password</label>
+          <div class="field">
+            <input type="password" id="password" placeholder="Enter password" autocomplete="current-password">
+            <button type="button" class="toggle-pw" id="togglePw" aria-label="Show or hide password">Show</button>
+          </div>
+        </div>
 
+        <button id="loginBtn">Login</button>
+
+        <div id="errorMsg"></div>
+        <div id="loading">Please wait...</div>
+
+        <div class="foot">Authorised users only</div>
+      </section>
+
+    </div>
   </div>
 
   <script type="module">
     import { loginUser, checkAuth, getUserProfile } from './js/firebase-config.js';
+
+    // Employee ID login: Firebase needs an email, so an ID typed without "@"
+    // is turned into  <id>@wipaudit.local  (create the Firebase user with that email).
+    const EMPLOYEE_ID_DOMAIN = "wipaudit.local";
 
     // If already logged in → go to home
     checkAuth(async (user) => {
@@ -408,13 +437,18 @@
     const togglePw = document.getElementById("togglePw");
 
     loginBtn.addEventListener("click", async () => {
-      const email = document.getElementById("email").value.trim();
+      const entered = document.getElementById("email").value.trim();
       const password = pwInput.value;
 
-      if (!email || !password) {
-        showError("Please enter email and password");
+      if (!entered || !password) {
+        showError("Please enter email / employee ID and password");
         return;
       }
+
+      // Email stays as typed; employee ID becomes an email
+      const email = entered.includes("@")
+        ? entered
+        : entered.toLowerCase().replace(/\s+/g, "") + "@" + EMPLOYEE_ID_DOMAIN;
 
       loginBtn.disabled = true;
       loading.style.display = "block";
@@ -428,13 +462,16 @@
       if (result.success) {
         window.location.href = "home.html";
       } else {
-        showError("Wrong email or password");
+        showError("Wrong email / employee ID or password");
       }
     });
 
     // Allow Enter key to login
     pwInput.addEventListener("keypress", (e) => {
       if (e.key === "Enter") loginBtn.click();
+    });
+    document.getElementById("email").addEventListener("keypress", (e) => {
+      if (e.key === "Enter") pwInput.focus();
     });
 
     // Show / hide password
