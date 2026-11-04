@@ -701,9 +701,7 @@ export async function writeStations(stations, { replace = false, onProgress } = 
 /* ---------- Inventory History (Admin) ---------- */
 
 export async function listInventoryChecks({ department = null, line = null, fromDate = null, toDate = null } = {}) {
-  let q = collection(db, 'inventoryChecks');
-  // We fetch all and filter in memory for simplicity (good enough for moderate data)
-  const snap = await getDocs(q);
+  const snap = await getDocs(collection(db, 'inventoryChecks'));
   let list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
   if (department) list = list.filter(c => c.department === department);
@@ -711,25 +709,25 @@ export async function listInventoryChecks({ department = null, line = null, from
 
   if (fromDate) {
     const from = new Date(fromDate);
-    from.setHours(0,0,0,0);
+    from.setHours(0, 0, 0, 0);
     list = list.filter(c => {
-      const d = c.createdAt?.toDate?.() || new Date(c.dateKey);
+      const d = c.createdAt?.toDate?.() || (c.dateKey ? new Date(c.dateKey) : new Date(0));
       return d >= from;
     });
   }
   if (toDate) {
     const to = new Date(toDate);
-    to.setHours(23,59,59,999);
+    to.setHours(23, 59, 59, 999);
     list = list.filter(c => {
-      const d = c.createdAt?.toDate?.() || new Date(c.dateKey);
+      const d = c.createdAt?.toDate?.() || (c.dateKey ? new Date(c.dateKey) : new Date(0));
       return d <= to;
     });
   }
 
-  // Sort newest first
+  // Newest first
   list.sort((a, b) => {
-    const da = a.createdAt?.toDate?.() || new Date(a.dateKey || 0);
-    const db = b.createdAt?.toDate?.() || new Date(b.dateKey || 0);
+    const da = a.createdAt?.toDate?.() || (a.dateKey ? new Date(a.dateKey) : new Date(0));
+    const db = b.createdAt?.toDate?.() || (b.dateKey ? new Date(b.dateKey) : new Date(0));
     return db - da;
   });
 
@@ -742,23 +740,71 @@ export async function getInventoryCheck(id) {
 }
 
 export async function updateInventoryCheck(id, data) {
-  await updateDoc(doc(db, 'inventoryChecks', id), {
+  const checkRef = doc(db, 'inventoryChecks', id);
+  const snap = await getDoc(checkRef);
+  if (!snap.exists()) throw new Error('Check not found');
+
+  const old = snap.data();
+  const updated = {
     ...data,
     updatedAt: serverTimestamp(),
-    updatedBy: auth.currentUser.uid
-  });
+    updatedBy: auth.currentUser?.uid || null
+  };
+
+  await updateDoc(checkRef, updated);
+
+  // Keep inventoryLatest in sync if this is the current latest check
+  try {
+    const latestRef = doc(db, 'inventoryLatest', old.lineKey);
+    const latestSnap = await getDoc(latestRef);
+    if (latestSnap.exists() && latestSnap.data().checkId === id) {
+      await setDoc(latestRef, {
+        ...old,
+        ...updated,
+        checkId: id
+      }, { merge: true });
+    }
+  } catch (e) {
+    console.warn('Could not update inventoryLatest', e);
+  }
 }
 
 export async function deleteInventoryCheck(id) {
-  // Also check if this was the latest for that line
-  const check = await getInventoryCheck(id);
-  await deleteDoc(doc(db, 'inventoryChecks', id));
+  const checkRef = doc(db, 'inventoryChecks', id);
+  const snap = await getDoc(checkRef);
+  if (!snap.exists()) return;
 
-  if (check) {
-    const latest = await getDoc(doc(db, 'inventoryLatest', check.lineKey));
-    if (latest.exists() && latest.data().checkId === id) {
-      // Clear or update latest (simple way: delete the latest pointer)
-      await deleteDoc(doc(db, 'inventoryLatest', check.lineKey));
+  const check = { id, ...snap.data() };
+  await deleteDoc(checkRef);
+
+  // If this was the latest check, promote the previous one (or remove the pointer)
+  try {
+    const latestRef = doc(db, 'inventoryLatest', check.lineKey);
+    const latestSnap = await getDoc(latestRef);
+
+    if (latestSnap.exists() && latestSnap.data().checkId === id) {
+      // Find the next most recent check for the same line
+      const allSnap = await getDocs(collection(db, 'inventoryChecks'));
+      const sameLine = allSnap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(c => c.lineKey === check.lineKey)
+        .sort((a, b) => {
+          const da = a.createdAt?.toDate?.() || (a.dateKey ? new Date(a.dateKey) : new Date(0));
+          const db = b.createdAt?.toDate?.() || (b.dateKey ? new Date(b.dateKey) : new Date(0));
+          return db - da;
+        });
+
+      if (sameLine.length > 0) {
+        const next = sameLine[0];
+        await setDoc(latestRef, {
+          ...next,
+          checkId: next.id
+        });
+      } else {
+        await deleteDoc(latestRef);
+      }
     }
+  } catch (e) {
+    console.warn('Could not update inventoryLatest after delete', e);
   }
 }
