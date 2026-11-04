@@ -480,6 +480,8 @@
         <input type="date" id="hfrom" aria-label="From date">
         <input type="date" id="hto" aria-label="To date">
         <span style="flex:1"></span>
+        <button type="button" class="btn btn-ghost" id="hImp">${icon('upload')}<span>Import Excel</span></button>
+        <button type="button" class="btn btn-ghost" id="hExp">${icon('download') || '⬇'}<span>Export</span></button>
         <button type="button" class="btn btn-primary" id="hAdd">${icon('plus')}<span>Add Past Check</span></button>
       </div>
       <div class="tbl-wrap"><table class="tbl">
@@ -502,6 +504,8 @@
     panel.querySelector('#hfrom').onchange = drawHistory;
     panel.querySelector('#hto').onchange = drawHistory;
     panel.querySelector('#hAdd').onclick = () => addPastCheck();
+    panel.querySelector('#hImp').onclick = importPastChecks;
+    panel.querySelector('#hExp').onclick = exportHistory;
 
     updateLines();
     drawHistory();
@@ -519,14 +523,14 @@
     if (from) {
       const f = new Date(from); f.setHours(0,0,0,0);
       list = list.filter(c => {
-        const dt = c.createdAt?.toDate?.() || new Date(c.dateKey);
+        const dt = c.createdAt?.toDate?.() || new Date(c.dateKey || 0);
         return dt >= f;
       });
     }
     if (to) {
       const t = new Date(to); t.setHours(23,59,59,999);
       list = list.filter(c => {
-        const dt = c.createdAt?.toDate?.() || new Date(c.dateKey);
+        const dt = c.createdAt?.toDate?.() || new Date(c.dateKey || 0);
         return dt <= t;
       });
     }
@@ -611,7 +615,6 @@
   }
 
   async function addPastCheck() {
-    // Simple version: choose department + line + date, then enter quantities
     const depts = STATION_DEPTS;
     const m = openModal({
       title: 'Add Past Inventory Check',
@@ -650,7 +653,7 @@
       }
     };
 
-    async function next(x, btn) {
+    async function next(x) {
       const dept = $('p_dept').value;
       const line = $('p_line').value;
       const date = $('p_date').value;
@@ -718,7 +721,6 @@
 
     function updateRow(tr) {
       const act = tr.querySelector('.act');
-      const why = tr.querySelector('.why');
       const res = tr.querySelector('.res');
       const i = Number(tr.dataset.i);
       const s = stations[i];
@@ -742,7 +744,6 @@
       }
     }
 
-    // Initial update
     tbody.querySelectorAll('tr').forEach(updateRow);
 
     async function save(x, btn) {
@@ -792,7 +793,6 @@
 
       try {
         if (isEdit) {
-          // Update existing
           const okCount = items.filter(i => i.status === 'OK').length;
           await updateInventoryCheck(existing.id, {
             items,
@@ -800,14 +800,12 @@
             notOkCount: items.length - okCount,
             total: items.length
           });
-          // Update local state
           const idx = state.checks.findIndex(c => c.id === existing.id);
           if (idx >= 0) {
             state.checks[idx] = { ...state.checks[idx], items, okCount, notOkCount: items.length - okCount, total: items.length };
           }
           toast('Check updated.');
         } else {
-          // Create new past check
           const saved = await saveInventoryCheck({
             department: dept,
             line,
@@ -815,9 +813,6 @@
             name: ctx.name,
             employeeId: ctx.employeeId
           });
-          // Force the date
-          // Note: saveInventoryCheck uses serverTimestamp. For true past date we need extra update.
-          // For simplicity we accept current timestamp for now, or we can improve later.
           state.checks.unshift(saved);
           toast('Past check saved.');
         }
@@ -838,6 +833,243 @@
     if (!c) { toast('Check not found'); return; }
     const dateStr = c.dateKey || (c.createdAt?.toDate?.()?.toISOString().slice(0,10)) || '';
     openQuantityEntry(c.department, c.line, dateStr, c);
+  }
+
+  /* ---------- Import Past Checks ---------- */
+  async function importPastChecks() {
+    const file = await pickFile();
+    if (!file) return;
+
+    let parsed;
+    try {
+      parsed = await readSheet(file, ['date', 'department', 'line', 'stationname', 'actual']);
+    } catch (e) {
+      toast(e.message);
+      return;
+    }
+
+    // Group by Date + Department + Line
+    const groups = {};
+    const errors = [];
+
+    parsed.rows.forEach((r, idx) => {
+      const date = String(r.date || '').trim();
+      const dept = fixDept(r.department);
+      const line = clean(r.line);
+      const stationName = clean(r.stationname);
+      const actual = Number(r.actual);
+      const reason = clean(r.reason || r.reasonifnotok || '');
+
+      if (!date || !dept || !line || !stationName) {
+        errors.push(`Row ${idx + 2}: Missing Date / Department / Line / Station`);
+        return;
+      }
+      if (!Number.isFinite(actual)) {
+        errors.push(`Row ${idx + 2}: Actual is not a number`);
+        return;
+      }
+
+      const key = `${date}|${dept}|${line}`;
+      if (!groups[key]) groups[key] = { date, department: dept, line, items: [] };
+      groups[key].items.push({ stationName, actual, reason });
+    });
+
+    const groupList = Object.values(groups);
+    if (!groupList.length) {
+      toast('No valid rows found in the file.');
+      return;
+    }
+
+    const m = openModal({
+      title: 'Import Past Checks',
+      wide: true,
+      html: `
+        <p>Found <b>${groupList.length}</b> checks to import (${parsed.rows.length} rows).</p>
+        ${errors.length ? `<p class="hint" style="color:#b91c1c">${errors.length} rows had problems and were skipped.</p>` : ''}
+        <div class="prog" id="ip" hidden><i></i></div>
+        <div class="hint" id="it"></div>
+        <div class="err" id="ie"></div>`,
+      actions: [
+        { label: 'Cancel', id: 'cancel', onClick: x => x.close() },
+        { label: `Import ${groupList.length} checks`, kind: 'primary', id: 'go', onClick: run }
+      ]
+    });
+
+    async function run(x, btn) {
+      x.locked = true;
+      btn.disabled = true;
+      x.buttons.cancel.disabled = true;
+      const bar = x.el.querySelector('#ip');
+      const txt = x.el.querySelector('#it');
+      bar.hidden = false;
+
+      let success = 0, fail = 0;
+
+      for (let i = 0; i < groupList.length; i++) {
+        const g = groupList[i];
+        txt.textContent = `Importing ${i + 1} of ${groupList.length}: ${g.department} - ${g.line} (${g.date})`;
+        bar.firstElementChild.style.width = Math.round(((i + 1) / groupList.length) * 100) + '%';
+
+        try {
+          // Get current stations for min/max
+          const stations = await listStationsByDepartment(g.department);
+          const lineStations = stations.filter(s => s.line === g.line);
+
+          const items = [];
+          for (const row of g.items) {
+            const st = lineStations.find(s => s.stationName.toLowerCase() === row.stationName.toLowerCase());
+            if (!st) continue;
+
+            const status = (row.actual >= st.min && row.actual <= st.max) ? 'OK' : 'Not OK';
+            items.push({
+              stationId: st.id,
+              stationName: st.stationName,
+              stationCode: st.stationCode || '',
+              min: st.min,
+              max: st.max,
+              actual: row.actual,
+              status,
+              reason: status === 'Not OK' ? row.reason : ''
+            });
+          }
+
+          if (items.length === 0) {
+            fail++;
+            continue;
+          }
+
+          await saveInventoryCheck({
+            department: g.department,
+            line: g.line,
+            items,
+            name: ctx.name + ' (Import)',
+            employeeId: ctx.employeeId
+          });
+          success++;
+        } catch (e) {
+          fail++;
+          console.error(e);
+        }
+      }
+
+      // Reload checks
+      state.checks = await listInventoryChecks();
+      state.loaded.checks = true;
+
+      txt.textContent = `Done: ${success} checks imported, ${fail} failed.`;
+      x.locked = false;
+      x.buttons.cancel.disabled = false;
+      x.buttons.cancel.textContent = 'Close';
+      updateTiles();
+      if (state.tab === 'history') drawHistory();
+    }
+  }
+
+  /* ---------- Export (Pivoted format with Compliance %) ---------- */
+  async function exportHistory() {
+    // Load XLSX if needed
+    try {
+      await loadXLSX();
+    } catch (e) {
+      toast(e.message);
+      return;
+    }
+
+    // Use currently filtered data
+    const d = panel.querySelector('#hd')?.value || '';
+    const l = panel.querySelector('#hl')?.value || '';
+    const from = panel.querySelector('#hfrom')?.value || '';
+    const to = panel.querySelector('#hto')?.value || '';
+
+    let list = state.checks.slice();
+    if (d) list = list.filter(c => c.department === d);
+    if (l) list = list.filter(c => c.line === l);
+    if (from) {
+      const f = new Date(from); f.setHours(0,0,0,0);
+      list = list.filter(c => (c.createdAt?.toDate?.() || new Date(c.dateKey || 0)) >= f);
+    }
+    if (to) {
+      const t = new Date(to); t.setHours(23,59,59,999);
+      list = list.filter(c => (c.createdAt?.toDate?.() || new Date(c.dateKey || 0)) <= t);
+    }
+
+    if (!list.length) {
+      toast('No data to export for the selected filters.');
+      return;
+    }
+
+    // Collect all unique dates
+    const dateSet = new Set();
+    list.forEach(c => {
+      const dt = c.createdAt?.toDate?.() || (c.dateKey ? new Date(c.dateKey) : null);
+      if (dt) {
+        const key = dt.toISOString().slice(0, 10);
+        dateSet.add(key);
+      }
+    });
+    const dates = [...dateSet].sort();
+
+    // Build station map: key = department|line|stationName
+    const stationMap = {};
+
+    list.forEach(c => {
+      const dt = c.createdAt?.toDate?.() || (c.dateKey ? new Date(c.dateKey) : null);
+      const dateKey = dt ? dt.toISOString().slice(0, 10) : null;
+      if (!dateKey) return;
+
+      (c.items || []).forEach(item => {
+        const key = `${c.department}|${c.line}|${item.stationName}`;
+        if (!stationMap[key]) {
+          stationMap[key] = {
+            department: c.department,
+            line: c.line,
+            station: item.stationName,
+            min: item.min,
+            max: item.max,
+            dates: {},
+            okCount: 0,
+            totalCount: 0,
+            reasons: new Set()
+          };
+        }
+        const s = stationMap[key];
+        s.dates[dateKey] = item.actual;
+        s.totalCount++;
+        if (item.status === 'OK') s.okCount++;
+        if (item.reason) s.reasons.add(item.reason);
+      });
+    });
+
+    // Build Excel data
+    const header = ['Department', 'Line', 'Station', 'Min', 'Max', ...dates.map(d => {
+      const dt = new Date(d);
+      return dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' });
+    }), 'Compliance %', 'Unique Reasons'];
+
+    const rows = Object.values(stationMap).map(s => {
+      const compliance = s.totalCount ? Math.round((s.okCount / s.totalCount) * 100) : 0;
+      return [
+        s.department,
+        s.line,
+        s.station,
+        s.min,
+        s.max,
+        ...dates.map(d => s.dates[d] ?? ''),
+        compliance,
+        [...s.reasons].join(', ')
+      ];
+    });
+
+    // Sort
+    rows.sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]) || a[2].localeCompare(b[2]));
+
+    const X = window.XLSX;
+    const ws = X.utils.aoa_to_sheet([header, ...rows]);
+    const wb = X.utils.book_new();
+    X.utils.book_append_sheet(wb, ws, 'Inventory History');
+    X.writeFile(wb, `Inventory_History_${new Date().toISOString().slice(0,10)}.xlsx`);
+
+    toast('Export completed.');
   }
 
   /* ---------- Admin message ---------- */
