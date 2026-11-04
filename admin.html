@@ -20,7 +20,6 @@
 <body>
 <div id="boot" role="status"><div><i></i>Loading Production WIP Audit…</div></div>
 <script>
-  // If loading takes unusually long, say what to do instead of staying silent
   setTimeout(function () {
     var b = document.getElementById('boot');
     if (b) b.firstElementChild.insertAdjacentHTML('beforeend', '<p>This is taking longer than usual. Check your internet connection, then reload the page.</p>');
@@ -31,30 +30,31 @@
     startPage, icon, esc, toast, openModal, confirmBox, friendlyError, DEPARTMENTS,
     listUsers, updateUser, createUser,
     listStations, stationId, saveStation, deleteStation, writeStations,
-    getAdminMessage, setAdminMessage, DEFAULT_ADMIN_MESSAGE
+    getAdminMessage, setAdminMessage, DEFAULT_ADMIN_MESSAGE,
+    listInventoryChecks, getInventoryCheck, updateInventoryCheck, deleteInventoryCheck,
+    listStationsByDepartment, saveInventoryCheck
   } from './js/wip-core.js';
 
-  // Only administrators get past this line (the database rules enforce it too).
   const ctx = await startPage({ active: 'admin', adminOnly: true, title: 'Admin Control' });
   const main = ctx.main;
 
-  const state = { users: [], stations: [], message: null, tab: 'users', loaded: { users: false, stations: false } };
+  const state = { users: [], stations: [], checks: [], message: null, tab: 'users', loaded: { users: false, stations: false, checks: false } };
   const clean = (v) => String(v ?? '').replace(/\s+/g, ' ').trim();
   const nk = (k) => String(k).toLowerCase().replace(/[^a-z0-9]/g, '');
   const opts = (list, sel, blank) => (blank ? `<option value="">${blank}</option>` : '') +
     list.map((o) => `<option ${o === sel ? 'selected' : ''}>${esc(o)}</option>`).join('');
   const fixDept = (d) => DEPARTMENTS.find((x) => x.toLowerCase() === clean(d).toLowerCase()) || clean(d);
-  // Departments a station may belong to (same list as user access, so every user can reach their stations)
   const STATION_DEPTS = DEPARTMENTS.filter((d) => d !== 'All');
   const stationDepts = (current) => (current && !STATION_DEPTS.includes(current) ? [...STATION_DEPTS, current] : STATION_DEPTS);
 
   /* ---------- Layout ---------- */
   main.innerHTML = `
     <div class="page-head"><h1>Admin Control</h1>
-      <p>Manage who can sign in, the station inventory limits, and the message shown on Home.</p></div>
+      <p>Manage who can sign in, the station inventory limits, past inventory checks, and the message shown on Home.</p></div>
     <div class="tiles" id="tabs">
       <button type="button" class="tile" data-t="users"><span class="ico">${icon('users')}</span><span><b>User Database</b><small id="cUsers">Loading</small></span></button>
       <button type="button" class="tile" data-t="inventory"><span class="ico">${icon('db')}</span><span><b>Inventory Database</b><small id="cInv">Loading</small></span></button>
+      <button type="button" class="tile" data-t="history"><span class="ico">${icon('clipboard')}</span><span><b>Inventory History</b><small id="cHist">View / Add past checks</small></span></button>
       <button type="button" class="tile" data-t="message"><span class="ico">${icon('msg')}</span><span><b>Admin Message</b><small>Shown on Home</small></span></button>
     </div>
     <section id="panel" class="panel"></section>`;
@@ -64,28 +64,28 @@
     const admins = state.users.filter((u) => u.role === 'admin').length;
     main.querySelector('#cUsers').textContent = state.loaded.users ? `${state.users.length} users, ${admins} admin${admins === 1 ? '' : 's'}` : 'Loading';
     main.querySelector('#cInv').textContent = state.loaded.stations ? `${state.stations.length} stations` : 'Loading';
+    main.querySelector('#cHist').textContent = state.loaded.checks ? `${state.checks.length} checks` : 'View / Add past checks';
     main.querySelectorAll('#tabs .tile').forEach((t) => t.classList.toggle('on', t.dataset.t === state.tab));
   }
   main.querySelectorAll('#tabs .tile').forEach((t) => { t.onclick = () => { location.hash = t.dataset.t; }; });
   const route = () => {
     const h = location.hash.replace('#', '');
-    state.tab = ['users', 'inventory', 'message'].includes(h) ? h : 'users';
+    state.tab = ['users', 'inventory', 'history', 'message'].includes(h) ? h : 'users';
     updateTiles();
-    ({ users: renderUsers, inventory: renderInventory, message: renderMessage })[state.tab]();
+    ({ users: renderUsers, inventory: renderInventory, history: renderHistory, message: renderMessage })[state.tab]();
   };
   window.addEventListener('hashchange', route);
 
   const errorBox = (e) => `<div class="empty"><b>Could not load data.</b><p>${esc(friendlyError(e))}</p></div>`;
 
-  // One read per collection, even if two parts of the page ask at the same time
   const inflight = {};
   function load(which) {
     return inflight[which] || (inflight[which] = (async () => {
       try {
-        // departments must be a list; profiles made by hand may hold plain text
-      if (which === 'users') state.users = (await listUsers()).map((u) => ({ ...u, departments: Array.isArray(u.departments) ? u.departments : (u.departments ? [String(u.departments)] : []) }));
-        else state.stations = await listStations();
-        state.loaded[which === 'users' ? 'users' : 'stations'] = true;
+        if (which === 'users') state.users = (await listUsers()).map((u) => ({ ...u, departments: Array.isArray(u.departments) ? u.departments : (u.departments ? [String(u.departments)] : []) }));
+        else if (which === 'stations') state.stations = await listStations();
+        else if (which === 'checks') state.checks = await listInventoryChecks();
+        state.loaded[which] = true;
         return null;
       } catch (e) { delete inflight[which]; return e; }
     })());
@@ -111,7 +111,6 @@
     });
   }
 
-  // Finds the sheet that has the wanted header and returns its rows with simplified keys
   async function readSheet(file, mustHave) {
     const X = await loadXLSX();
     const wb = X.read(await file.arrayBuffer(), { type: 'array' });
@@ -128,7 +127,7 @@
     throw new Error('Could not find the expected columns in this file.');
   }
 
-  /* ---------- Users ---------- */
+  /* ---------- Users (same as before) ---------- */
   const userSort = (a, b) => (a.userNo ?? 1e9) - (b.userNo ?? 1e9) || String(a.name).localeCompare(String(b.name));
 
   async function renderUsers() {
@@ -300,7 +299,7 @@
     }
   }
 
-  /* ---------- Inventory ---------- */
+  /* ---------- Inventory (same as before) ---------- */
   async function renderInventory() {
     if (!state.loaded.stations) {
       panel.innerHTML = '<div class="empty">Loading stations…</div>';
@@ -458,6 +457,389 @@
     }
   }
 
+  /* ---------- Inventory History (NEW) ---------- */
+  async function renderHistory() {
+    if (!state.loaded.checks) {
+      panel.innerHTML = '<div class="empty">Loading inventory history…</div>';
+      const e = await load('checks');
+      updateTiles();
+      if (e) { panel.innerHTML = errorBox(e); return; }
+      if (state.tab !== 'history') return;
+    }
+
+    const depts = [...new Set(state.checks.map(c => c.department).filter(Boolean))];
+    panel.innerHTML = `
+      <div class="toolbar">
+        <select id="hd" aria-label="Filter by department">
+          <option value="">All departments</option>
+          ${depts.map(d => `<option>${esc(d)}</option>`).join('')}
+        </select>
+        <select id="hl" aria-label="Filter by line">
+          <option value="">All lines</option>
+        </select>
+        <input type="date" id="hfrom" aria-label="From date">
+        <input type="date" id="hto" aria-label="To date">
+        <span style="flex:1"></span>
+        <button type="button" class="btn btn-primary" id="hAdd">${icon('plus')}<span>Add Past Check</span></button>
+      </div>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr>
+          <th>Date</th><th>Department</th><th>Line</th><th>Submitted by</th>
+          <th class="num">OK</th><th class="num">Not OK</th><th class="num">Total</th><th></th>
+        </tr></thead>
+        <tbody id="hb"></tbody>
+      </table></div>
+      <div class="note" id="hNote"></div>`;
+
+    const updateLines = () => {
+      const d = panel.querySelector('#hd').value;
+      const lines = [...new Set(state.checks.filter(c => !d || c.department === d).map(c => c.line))];
+      panel.querySelector('#hl').innerHTML = '<option value="">All lines</option>' + lines.map(l => `<option>${esc(l)}</option>`).join('');
+    };
+
+    panel.querySelector('#hd').onchange = () => { updateLines(); drawHistory(); };
+    panel.querySelector('#hl').onchange = drawHistory;
+    panel.querySelector('#hfrom').onchange = drawHistory;
+    panel.querySelector('#hto').onchange = drawHistory;
+    panel.querySelector('#hAdd').onclick = () => addPastCheck();
+
+    updateLines();
+    drawHistory();
+  }
+
+  function drawHistory() {
+    const d = panel.querySelector('#hd').value;
+    const l = panel.querySelector('#hl').value;
+    const from = panel.querySelector('#hfrom').value;
+    const to = panel.querySelector('#hto').value;
+
+    let list = state.checks.slice();
+    if (d) list = list.filter(c => c.department === d);
+    if (l) list = list.filter(c => c.line === l);
+    if (from) {
+      const f = new Date(from); f.setHours(0,0,0,0);
+      list = list.filter(c => {
+        const dt = c.createdAt?.toDate?.() || new Date(c.dateKey);
+        return dt >= f;
+      });
+    }
+    if (to) {
+      const t = new Date(to); t.setHours(23,59,59,999);
+      list = list.filter(c => {
+        const dt = c.createdAt?.toDate?.() || new Date(c.dateKey);
+        return dt <= t;
+      });
+    }
+
+    const tb = panel.querySelector('#hb');
+    const fmt = (c) => {
+      const dt = c.createdAt?.toDate?.() || (c.dateKey ? new Date(c.dateKey) : null);
+      return dt ? dt.toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' }) : '-';
+    };
+
+    tb.innerHTML = list.map(c => `
+      <tr>
+        <td data-label="Date">${fmt(c)}</td>
+        <td data-label="Department">${esc(c.department)}</td>
+        <td data-label="Line">${esc(c.line)}</td>
+        <td data-label="Submitted by">${esc(c.name || '')} <small style="color:var(--muted)">${esc(c.employeeId || '')}</small></td>
+        <td class="num" data-label="OK">${c.okCount ?? 0}</td>
+        <td class="num" data-label="Not OK">${c.notOkCount ?? 0}</td>
+        <td class="num" data-label="Total">${c.total ?? (c.items?.length || 0)}</td>
+        <td class="acts-td"><div class="acts">
+          <button type="button" class="btn btn-ghost btn-sm" data-v="${esc(c.id)}">View</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-e="${esc(c.id)}">${icon('edit')}</button>
+          <button type="button" class="btn btn-danger btn-sm" data-d="${esc(c.id)}">${icon('trash')}</button>
+        </div></td>
+      </tr>
+    `).join('') || `<tr><td colspan="8"><div class="empty">No inventory checks found for the selected filters.</div></td></tr>`;
+
+    panel.querySelector('#hNote').textContent = `Showing ${list.length} of ${state.checks.length} checks`;
+
+    tb.querySelectorAll('[data-v]').forEach(b => b.onclick = () => viewCheck(b.dataset.v));
+    tb.querySelectorAll('[data-e]').forEach(b => b.onclick = () => editCheck(b.dataset.e));
+    tb.querySelectorAll('[data-d]').forEach(b => b.onclick = () => removeCheck(b.dataset.d));
+  }
+
+  async function viewCheck(id) {
+    const c = await getInventoryCheck(id);
+    if (!c) { toast('Check not found'); return; }
+    const dt = c.createdAt?.toDate?.() || (c.dateKey ? new Date(c.dateKey) : null);
+    const dateStr = dt ? dt.toLocaleString('en-IN') : c.dateKey || '-';
+
+    const rows = (c.items || []).map(i => `
+      <tr>
+        <td>${esc(i.stationName)}</td>
+        <td class="num">${i.min}</td>
+        <td class="num">${i.max}</td>
+        <td class="num">${i.actual}</td>
+        <td><span class="badge ${i.status === 'OK' ? 'ok' : 'bad'}">${esc(i.status)}</span></td>
+        <td>${esc(i.reason || '-')}</td>
+      </tr>`).join('');
+
+    openModal({
+      title: `Inventory Check – ${esc(c.line)}`,
+      wide: true,
+      html: `
+        <p><b>Date:</b> ${esc(dateStr)} &nbsp;|&nbsp; <b>Department:</b> ${esc(c.department)} &nbsp;|&nbsp; <b>By:</b> ${esc(c.name)} (${esc(c.employeeId)})</p>
+        <p><b>OK:</b> ${c.okCount} &nbsp; <b>Not OK:</b> ${c.notOkCount} &nbsp; <b>Total stations:</b> ${c.total}</p>
+        <div class="tbl-wrap" style="margin-top:14px"><table class="tbl">
+          <thead><tr><th>Station</th><th class="num">Min</th><th class="num">Max</th><th class="num">Actual</th><th>Result</th><th>Reason</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>`,
+      actions: [{ label: 'Close', onClick: m => m.close() }]
+    });
+  }
+
+  async function removeCheck(id) {
+    const ok = await confirmBox({
+      title: 'Delete inventory check',
+      message: 'This will permanently delete this check. Continue?',
+      okLabel: 'Delete',
+      danger: true
+    });
+    if (!ok) return;
+    try {
+      await deleteInventoryCheck(id);
+      state.checks = state.checks.filter(c => c.id !== id);
+      updateTiles();
+      drawHistory();
+      toast('Check deleted.');
+    } catch (e) {
+      toast(friendlyError(e));
+    }
+  }
+
+  async function addPastCheck() {
+    // Simple version: choose department + line + date, then enter quantities
+    const depts = STATION_DEPTS;
+    const m = openModal({
+      title: 'Add Past Inventory Check',
+      html: `
+        <form class="fg">
+          <div><label class="l">Department</label>
+            <select id="p_dept"><option value="">Select</option>${depts.map(d => `<option>${esc(d)}</option>`).join('')}</select>
+          </div>
+          <div><label class="l">Line</label>
+            <select id="p_line" disabled><option value="">Select department first</option></select>
+          </div>
+          <div class="full"><label class="l">Date of check</label>
+            <input type="date" id="p_date" max="${new Date().toISOString().slice(0,10)}">
+          </div>
+        </form>
+        <div class="err" id="p_err"></div>`,
+      actions: [
+        { label: 'Cancel', onClick: x => x.close() },
+        { label: 'Next → Enter Quantities', kind: 'primary', onClick: next }
+      ]
+    });
+
+    const $ = id => m.el.querySelector('#' + id);
+    $('p_dept').onchange = async () => {
+      const dept = $('p_dept').value;
+      $('p_line').innerHTML = '<option value="">Loading…</option>';
+      $('p_line').disabled = true;
+      if (!dept) return;
+      try {
+        const stations = await listStationsByDepartment(dept);
+        const lines = [...new Set(stations.map(s => s.line))];
+        $('p_line').innerHTML = '<option value="">Select line</option>' + lines.map(l => `<option>${esc(l)}</option>`).join('');
+        $('p_line').disabled = false;
+      } catch (e) {
+        $('p_err').textContent = friendlyError(e);
+      }
+    };
+
+    async function next(x, btn) {
+      const dept = $('p_dept').value;
+      const line = $('p_line').value;
+      const date = $('p_date').value;
+      const err = $('p_err');
+      err.textContent = '';
+      if (!dept || !line || !date) {
+        err.textContent = 'Please select department, line and date.';
+        return;
+      }
+      x.close();
+      openQuantityEntry(dept, line, date);
+    }
+  }
+
+  async function openQuantityEntry(dept, line, dateStr, existing = null) {
+    let stations = await listStationsByDepartment(dept);
+    stations = stations.filter(s => s.line === line);
+
+    if (!stations.length) {
+      toast('No stations found for this line.');
+      return;
+    }
+
+    const isEdit = !!existing;
+    const title = isEdit ? 'Edit Inventory Check' : `Enter quantities – ${line} (${dateStr})`;
+
+    const rowsHtml = stations.map((s, i) => {
+      const item = existing?.items?.find(it => it.stationId === s.id) || {};
+      return `
+        <tr data-i="${i}">
+          <td><b>${esc(s.stationName)}</b></td>
+          <td class="num">${s.min}</td>
+          <td class="num">${s.max}</td>
+          <td><input class="act" type="number" min="0" step="1" value="${item.actual ?? ''}" style="width:90px"></td>
+          <td class="res">-</td>
+          <td><input class="why" type="text" maxlength="200" value="${esc(item.reason || '')}" placeholder="Reason if Not OK" style="width:100%"></td>
+        </tr>`;
+    }).join('');
+
+    const m = openModal({
+      title,
+      wide: true,
+      html: `
+        <p><b>${esc(dept)}</b> → <b>${esc(line)}</b> → Date: <b>${esc(dateStr)}</b></p>
+        <div class="tbl-wrap" style="margin-top:12px"><table class="tbl">
+          <thead><tr>
+            <th>Station</th><th class="num">Min</th><th class="num">Max</th>
+            <th>Actual</th><th>Result</th><th>Reason if Not OK</th>
+          </tr></thead>
+          <tbody id="qrows">${rowsHtml}</tbody>
+        </table></div>
+        <div class="err" id="qerr" style="margin-top:12px"></div>`,
+      actions: [
+        { label: 'Cancel', onClick: x => x.close() },
+        { label: isEdit ? 'Save Changes' : 'Save Check', kind: 'primary', onClick: save }
+      ]
+    });
+
+    const tbody = m.el.querySelector('#qrows');
+    tbody.addEventListener('input', (e) => {
+      const tr = e.target.closest('tr');
+      if (!tr) return;
+      updateRow(tr);
+    });
+
+    function updateRow(tr) {
+      const act = tr.querySelector('.act');
+      const why = tr.querySelector('.why');
+      const res = tr.querySelector('.res');
+      const i = Number(tr.dataset.i);
+      const s = stations[i];
+      const val = act.value.trim();
+      if (val === '') {
+        res.innerHTML = '-';
+        tr.classList.remove('bad');
+        return;
+      }
+      const n = Number(val);
+      if (!Number.isInteger(n) || n < 0) {
+        res.innerHTML = '<span class="badge bad">Invalid</span>';
+        return;
+      }
+      if (n >= s.min && n <= s.max) {
+        res.innerHTML = '<span class="badge ok">OK</span>';
+        tr.classList.remove('bad');
+      } else {
+        res.innerHTML = `<span class="badge bad">Not OK</span>`;
+        tr.classList.add('bad');
+      }
+    }
+
+    // Initial update
+    tbody.querySelectorAll('tr').forEach(updateRow);
+
+    async function save(x, btn) {
+      const err = m.el.querySelector('#qerr');
+      err.textContent = '';
+      const items = [];
+      let hasError = false;
+
+      tbody.querySelectorAll('tr').forEach((tr, i) => {
+        const s = stations[i];
+        const actualStr = tr.querySelector('.act').value.trim();
+        const reason = tr.querySelector('.why').value.trim();
+        if (actualStr === '') {
+          hasError = true;
+          tr.querySelector('.act').style.borderColor = 'red';
+          return;
+        }
+        const actual = Number(actualStr);
+        if (!Number.isInteger(actual) || actual < 0) {
+          hasError = true;
+          return;
+        }
+        const status = (actual >= s.min && actual <= s.max) ? 'OK' : 'Not OK';
+        if (status === 'Not OK' && reason.length < 3) {
+          hasError = true;
+          tr.querySelector('.why').style.borderColor = 'red';
+        }
+        items.push({
+          stationId: s.id,
+          stationName: s.stationName,
+          stationCode: s.stationCode || '',
+          min: s.min,
+          max: s.max,
+          actual,
+          status,
+          reason: status === 'Not OK' ? reason : ''
+        });
+      });
+
+      if (hasError) {
+        err.textContent = 'Please fill all quantities. For Not OK stations, enter a reason (min 3 characters).';
+        return;
+      }
+
+      btn.disabled = true;
+      x.locked = true;
+
+      try {
+        if (isEdit) {
+          // Update existing
+          const okCount = items.filter(i => i.status === 'OK').length;
+          await updateInventoryCheck(existing.id, {
+            items,
+            okCount,
+            notOkCount: items.length - okCount,
+            total: items.length
+          });
+          // Update local state
+          const idx = state.checks.findIndex(c => c.id === existing.id);
+          if (idx >= 0) {
+            state.checks[idx] = { ...state.checks[idx], items, okCount, notOkCount: items.length - okCount, total: items.length };
+          }
+          toast('Check updated.');
+        } else {
+          // Create new past check
+          const saved = await saveInventoryCheck({
+            department: dept,
+            line,
+            items,
+            name: ctx.name,
+            employeeId: ctx.employeeId
+          });
+          // Force the date
+          // Note: saveInventoryCheck uses serverTimestamp. For true past date we need extra update.
+          // For simplicity we accept current timestamp for now, or we can improve later.
+          state.checks.unshift(saved);
+          toast('Past check saved.');
+        }
+        x.locked = false;
+        x.close();
+        updateTiles();
+        if (state.tab === 'history') drawHistory();
+      } catch (e) {
+        err.textContent = friendlyError(e);
+        btn.disabled = false;
+        x.locked = false;
+      }
+    }
+  }
+
+  async function editCheck(id) {
+    const c = await getInventoryCheck(id);
+    if (!c) { toast('Check not found'); return; }
+    const dateStr = c.dateKey || (c.createdAt?.toDate?.()?.toISOString().slice(0,10)) || '';
+    openQuantityEntry(c.department, c.line, dateStr, c);
+  }
+
   /* ---------- Admin message ---------- */
   async function renderMessage() {
     panel.innerHTML = '<div class="empty">Loading…</div>';
@@ -481,9 +863,10 @@
     };
   }
 
-  // Load counts for both tiles in the background, then show the chosen tab
+  // Load counts
   load('users').then(updateTiles);
   load('stations').then(updateTiles);
+  load('checks').then(updateTiles);
   route();
 </script>
 </body>

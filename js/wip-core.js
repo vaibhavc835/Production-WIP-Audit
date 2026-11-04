@@ -698,3 +698,67 @@ export async function writeStations(stations, { replace = false, onProgress } = 
   }
   return ops.length;
 }
+/* ---------- Inventory History (Admin) ---------- */
+
+export async function listInventoryChecks({ department = null, line = null, fromDate = null, toDate = null } = {}) {
+  let q = collection(db, 'inventoryChecks');
+  // We fetch all and filter in memory for simplicity (good enough for moderate data)
+  const snap = await getDocs(q);
+  let list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  if (department) list = list.filter(c => c.department === department);
+  if (line) list = list.filter(c => c.line === line);
+
+  if (fromDate) {
+    const from = new Date(fromDate);
+    from.setHours(0,0,0,0);
+    list = list.filter(c => {
+      const d = c.createdAt?.toDate?.() || new Date(c.dateKey);
+      return d >= from;
+    });
+  }
+  if (toDate) {
+    const to = new Date(toDate);
+    to.setHours(23,59,59,999);
+    list = list.filter(c => {
+      const d = c.createdAt?.toDate?.() || new Date(c.dateKey);
+      return d <= to;
+    });
+  }
+
+  // Sort newest first
+  list.sort((a, b) => {
+    const da = a.createdAt?.toDate?.() || new Date(a.dateKey || 0);
+    const db = b.createdAt?.toDate?.() || new Date(b.dateKey || 0);
+    return db - da;
+  });
+
+  return list;
+}
+
+export async function getInventoryCheck(id) {
+  const snap = await getDoc(doc(db, 'inventoryChecks', id));
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+}
+
+export async function updateInventoryCheck(id, data) {
+  await updateDoc(doc(db, 'inventoryChecks', id), {
+    ...data,
+    updatedAt: serverTimestamp(),
+    updatedBy: auth.currentUser.uid
+  });
+}
+
+export async function deleteInventoryCheck(id) {
+  // Also check if this was the latest for that line
+  const check = await getInventoryCheck(id);
+  await deleteDoc(doc(db, 'inventoryChecks', id));
+
+  if (check) {
+    const latest = await getDoc(doc(db, 'inventoryLatest', check.lineKey));
+    if (latest.exists() && latest.data().checkId === id) {
+      // Clear or update latest (simple way: delete the latest pointer)
+      await deleteDoc(doc(db, 'inventoryLatest', check.lineKey));
+    }
+  }
+}
