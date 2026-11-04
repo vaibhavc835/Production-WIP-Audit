@@ -44,6 +44,9 @@
   const opts = (list, sel, blank) => (blank ? `<option value="">${blank}</option>` : '') +
     list.map((o) => `<option ${o === sel ? 'selected' : ''}>${esc(o)}</option>`).join('');
   const fixDept = (d) => DEPARTMENTS.find((x) => x.toLowerCase() === clean(d).toLowerCase()) || clean(d);
+  // Departments a station may belong to (same list as user access, so every user can reach their stations)
+  const STATION_DEPTS = DEPARTMENTS.filter((d) => d !== 'All');
+  const stationDepts = (current) => (current && !STATION_DEPTS.includes(current) ? [...STATION_DEPTS, current] : STATION_DEPTS);
 
   /* ---------- Layout ---------- */
   main.innerHTML = `
@@ -364,13 +367,13 @@
     const m = openModal({
       title: edit ? 'Edit station' : 'Add station',
       html: `<form class="fg" autocomplete="off">
-        <div><label class="l" for="s_d">Department</label><input id="s_d" list="dl_d" value="${esc(s?.department || '')}"></div>
+        <div><label class="l" for="s_d">Department</label><select id="s_d">${opts(stationDepts(s?.department), s?.department || '', 'Select department')}</select></div>
         <div><label class="l" for="s_l">Line</label><input id="s_l" list="dl_l" value="${esc(s?.line || '')}"></div>
         <div><label class="l" for="s_c">Station code</label><input id="s_c" value="${esc(s?.stationCode || '')}"><div class="hint">Optional.</div></div>
         <div><label class="l" for="s_n">Station name</label><input id="s_n" value="${esc(s?.stationName || '')}"></div>
         <div><label class="l" for="s_min">Minimum</label><input id="s_min" type="number" min="0" step="1" value="${esc(s?.min ?? '')}"></div>
         <div><label class="l" for="s_max">Maximum</label><input id="s_max" type="number" min="0" step="1" value="${esc(s?.max ?? '')}"></div>
-      </form>${dl('dl_d', state.stations.map((x) => x.department))}${dl('dl_l', state.stations.map((x) => x.line))}<div class="err" id="s_err"></div>`,
+      </form>${dl('dl_l', state.stations.map((x) => x.line))}<div class="err" id="s_err"></div>`,
       actions: [
         { label: 'Cancel', onClick: (x) => x.close() },
         { label: edit ? 'Save changes' : 'Add station', kind: 'primary', onClick: save }
@@ -405,9 +408,10 @@
     catch (e) { toast(e.message); return; }
     const used = new Set(), rows = [], bad = [];
     parsed.rows.forEach((r, i) => {
-      const s = { department: clean(r.department), line: clean(r.line), stationCode: clean(r.stationcode), stationName: clean(r.stationname), min: Number(r.min), max: Number(r.max), order: i + 1 };
+      const s = { department: fixDept(r.department), line: clean(r.line), stationCode: clean(r.stationcode), stationName: clean(r.stationname), min: Number(r.min), max: Number(r.max), order: i + 1 };
       if (!s.department && !s.stationName) return;
       if (!s.department || !s.line || !s.stationName) return bad.push([i + 2, 'Department, line or station name missing']);
+      if (!STATION_DEPTS.includes(s.department)) return bad.push([i + 2, `Unknown department “${s.department}”. Add it to DEPARTMENTS in wip-core.js first`]);
       if (!Number.isFinite(s.min) || !Number.isFinite(s.max) || r.min === '' || r.max === '') return bad.push([i + 2, 'Min or max is not a number']);
       if (s.min > s.max) return bad.push([i + 2, 'Min is higher than max']);
       let id = stationId(s), n = 2; const base = id;

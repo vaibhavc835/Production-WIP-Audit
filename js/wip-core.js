@@ -21,8 +21,8 @@ const [{ initializeApp }, A, F] = await Promise.all([
 ]);
 const { getAuth, onAuthStateChanged, signOut, createUserWithEmailAndPassword,
         EmailAuthProvider, reauthenticateWithCredential, updatePassword } = A;
-const { getFirestore, initializeFirestore, doc, collection, getDoc, getDocs, setDoc, updateDoc,
-        deleteDoc, writeBatch, serverTimestamp } = F;
+const { getFirestore, initializeFirestore, doc, collection, query, where, getDoc, getDocs, setDoc,
+        updateDoc, deleteDoc, writeBatch, serverTimestamp } = F;
 
 /* ---------- Settings you may want to change ---------- */
 // Same value as in index.html. An employee ID "12345" logs in as 12345@wipaudit.local
@@ -45,7 +45,7 @@ export const NAV = [
   { key: 'home',          label: 'Home',           icon: 'home',     href: 'home.html' },
   { key: 'dashboard',     label: 'Dashboard',      icon: 'dashboard', href: 'dashboard.html' },
   { key: 'about',         label: 'About',          icon: 'info',     modal: 'about' },
-  { key: 'inventory',     label: 'Inventory',      icon: 'box',      href: null },
+  { key: 'inventory',     label: 'Inventory',      icon: 'box',      href: 'inventory.html' },
   { key: 'issue',         label: 'Issue Report',   icon: 'alert',    href: null },
   { key: 'improvement',   label: 'Improvement',    icon: 'trend',    href: null },
   { key: 'multiskilling', label: 'Multiskilling',  icon: 'users',    href: null },
@@ -641,6 +641,40 @@ export async function listStations() {
 }
 export const slug = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 export const stationId = (s) => slug([s.department, s.line, s.stationCode || s.stationName].join('|'));
+// Fresh read of one department (used by the Inventory check page so limits are always current)
+export async function listStationsByDepartment(dept) {
+  const s = await getDocs(query(collection(db, 'inventory'), where('department', '==', dept)));
+  return s.docs.map((d) => ({ id: d.id, ...d.data() }))
+    .sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || String(a.stationName).localeCompare(String(b.stationName)));
+}
+
+/* ---------- Inventory checks ---------- */
+const lineKey = (dept, line) => slug(`${dept}|${line}`);
+
+export async function getLatestCheck(dept, line) {
+  try { const s = await getDoc(doc(db, 'inventoryLatest', lineKey(dept, line))); return s.exists() ? s.data() : null; }
+  catch { return null; }
+}
+
+// items: [{ stationId, stationName, stationCode, min, max, actual, status: 'OK' | 'Not OK', reason }]
+export async function saveInventoryCheck({ department, line, items, name, employeeId }) {
+  const okCount = items.filter((i) => i.status === 'OK').length;
+  const now = new Date(), p = (n) => String(n).padStart(2, '0');
+  const record = {
+    department, line, lineKey: lineKey(department, line),
+    uid: auth.currentUser.uid, name, employeeId,
+    items, total: items.length, okCount, notOkCount: items.length - okCount,
+    dateKey: `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`,
+    createdAt: serverTimestamp()
+  };
+  const ref = doc(collection(db, 'inventoryChecks'));
+  const batch = writeBatch(db);
+  batch.set(ref, record);                                                        // full history
+  batch.set(doc(db, 'inventoryLatest', record.lineKey), { ...record, checkId: ref.id }); // newest per line
+  await batch.commit();
+  return { id: ref.id, ...record, createdAt: now };
+}
+
 export async function saveStation(id, data) {
   await setDoc(doc(db, 'inventory', id), { ...data, updatedAt: serverTimestamp() }, { merge: true });
 }

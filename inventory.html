@@ -3,156 +3,235 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Home | Production WIP Audit</title>
+  <meta name="theme-color" content="#0b1220">
+  <title>Inventory | Production WIP Audit</title>
+  <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+  <link rel="modulepreload" href="js/wip-core.js">
+  <link rel="modulepreload" href="js/firebase-config.js">
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', system-ui, sans-serif; }
-    body { background: #f1f5f9; min-height: 100vh; }
-    header {
-      background: #0f172a;
-      color: white;
-      padding: 16px 24px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    header h1 { font-size: 18px; font-weight: 600; }
-    .user-info { font-size: 13px; opacity: 0.85; }
-    .logout-btn {
-      background: #334155;
-      color: white;
-      border: none;
-      padding: 7px 14px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 13px;
-      margin-left: 12px;
-    }
-    .logout-btn:hover { background: #475569; }
-    .container { max-width: 1100px; margin: 30px auto; padding: 0 20px; }
-    .welcome { margin-bottom: 24px; }
-    .welcome h2 { font-size: 22px; color: #0f172a; }
-    .welcome p { color: #64748b; font-size: 14px; margin-top: 4px; }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-      gap: 16px;
-    }
-    .card {
-      background: white;
-      border-radius: 12px;
-      padding: 22px 18px;
-      text-align: center;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-      cursor: pointer;
-      transition: 0.2s;
-      border: 1px solid #e2e8f0;
-    }
-    .card:hover {
-      transform: translateY(-3px);
-      box-shadow: 0 8px 20px rgba(0,0,0,0.1);
-      border-color: #3b82f6;
-    }
-    .card h3 { font-size: 15px; color: #0f172a; margin-bottom: 6px; }
-    .card p { font-size: 12px; color: #64748b; }
-    .admin-link {
-      display: inline-block;
-      margin-top: 30px;
-      background: #2563eb;
-      color: white;
-      padding: 10px 20px;
-      border-radius: 8px;
-      text-decoration: none;
-      font-size: 14px;
-      font-weight: 500;
-    }
-    .admin-link:hover { background: #1d4ed8; }
-    .no-access {
-      background: white;
-      padding: 40px;
-      border-radius: 12px;
-      text-align: center;
-      color: #64748b;
+    html,body{margin:0;background:#0b1220}
+    #boot{position:fixed;inset:0;display:grid;place-items:center;text-align:center;background:linear-gradient(135deg,#0b1220,#12304f);color:#cbd5e1;font:15px 'Segoe UI',system-ui,sans-serif}
+    #boot i{display:block;width:34px;height:34px;margin:0 auto 14px;border-radius:50%;border:3px solid rgba(255,255,255,.2);border-top-color:#4ade80;animation:bootspin .8s linear infinite}
+    #boot p{margin-top:10px;max-width:300px;font-size:13.5px;color:#94a3b8}
+    @keyframes bootspin{to{transform:rotate(360deg)}}
+    @media (prefers-reduced-motion:reduce){#boot i{animation:none}}
+
+    /* Inventory check page */
+    .pick{padding:18px 16px}
+    .sheet-head{padding:14px 16px;border-bottom:1px solid var(--line)}
+    .sheet-head b{font-size:16px}
+    .chk td small{display:block;color:var(--muted);font-size:12px}
+    .chk .act{width:110px;text-align:right;font-variant-numeric:tabular-nums}
+    .chk .why{display:none;min-width:220px}
+    .chk tr.bad .why{display:block}
+    .chk tr.bad{background:#fff8f8}
+    .chk td.reason .none{color:var(--muted)}
+    .chk tr.bad td.reason .none{display:none}
+    .chk input.invalid{border-color:var(--danger);box-shadow:0 0 0 3px rgba(220,38,38,.12)}
+    .res small{display:block;font-size:12px;color:#991b1b;margin-top:2px}
+    .badge.ok{background:#dcfce7;color:#166534}
+    .badge.bad{background:#fee2e2;color:#991b1b}
+    .submitbar{position:sticky;bottom:0;display:flex;gap:12px;align-items:center;flex-wrap:wrap;justify-content:space-between;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 16px;margin-top:16px;box-shadow:0 -8px 24px rgba(15,23,42,.06);z-index:5}
+    .stats{display:flex;gap:8px;flex-wrap:wrap}
+    .stat{padding:3px 11px;border-radius:999px;background:#eef2f6;font-size:13px;font-weight:600}
+    .stat.ok{background:#dcfce7;color:#166534}
+    .stat.bad{background:#fee2e2;color:#991b1b}
+    .submit-side{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+    .submit-msg{color:var(--danger);font-size:13.5px}
+    @media (max-width:560px){
+      .chk tr:not(.bad) td.reason{display:none}
+      .chk .act{width:120px}
+      .chk .why{min-width:0;width:100%}
+      .chk td.reason{flex-direction:column;align-items:stretch;gap:6px}
+      .chk td.reason::before{text-align:left}
+      .submitbar{padding:10px 12px}
+      .submit-side{width:100%}
+      .submit-side .btn{flex:1}
     }
   </style>
 </head>
 <body>
+<div id="boot" role="status"><div><i></i>Loading Production WIP Audit…</div></div>
+<script>
+  setTimeout(function () {
+    var b = document.getElementById('boot');
+    if (b) b.firstElementChild.insertAdjacentHTML('beforeend', '<p>This is taking longer than usual. Check your internet connection, then reload the page.</p>');
+  }, 12000);
+</script>
+<script type="module">
+  import {
+    startPage, esc, toast, confirmBox, friendlyError, DEPARTMENTS,
+    listStationsByDepartment, getLatestCheck, saveInventoryCheck
+  } from './js/wip-core.js';
 
-  <header>
-    <h1>Production WIP Audit</h1>
-    <div>
-      <span class="user-info" id="userEmail">Loading...</span>
-      <button class="logout-btn" id="logoutBtn">Logout</button>
-    </div>
-  </header>
+  const ctx = await startPage({ active: 'inventory', title: 'Inventory' });
+  const main = ctx.main;
 
-  <div class="container">
-    <div class="welcome">
-      <h2>Select Area</h2>
-      <p>Choose the area you want to view</p>
-    </div>
+  // A user sees the departments listed in their profile; "All" means every department.
+  const depts = ctx.departments.includes('All')
+    ? DEPARTMENTS.filter((d) => d !== 'All')
+    : [...new Set(ctx.departments)];
 
-    <div class="grid" id="areaGrid">
-      <!-- Areas will load here -->
-    </div>
+  main.innerHTML = `
+    <div class="page-head"><h1>Inventory check</h1>
+      <p>Pick a department and a line, then enter the actual quantity at each station. Each result is checked against the minimum and maximum straight away.</p></div>
+    ${depts.length ? `
+    <section class="panel pick">
+      <div class="fg">
+        <div><label class="l" for="dep">Department</label>
+          <select id="dep"><option value="">Select department</option>${depts.map((d) => `<option>${esc(d)}</option>`).join('')}</select></div>
+        <div><label class="l" for="line">Line</label>
+          <select id="line" disabled><option value="">Select line</option></select></div>
+      </div>
+    </section>
+    <section id="sheet"></section>` : `
+    <section class="panel"><div class="empty"><b>No department access yet.</b>
+      <p>Ask an administrator to give your account access to a department.</p></div></section>`}`;
+  if (!depts.length) await new Promise(() => {});
 
-    <div id="adminSection" style="display:none; text-align:center;">
-      <a href="admin.html" class="admin-link">Go to Admin Panel</a>
-    </div>
-  </div>
+  const dep = main.querySelector('#dep'), line = main.querySelector('#line'), sheet = main.querySelector('#sheet');
+  const cur = { dept: '', line: '', stations: [], rows: [], busy: false };
+  const fmt = (d) => d.toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
-  <script type="module">
-    import { checkAuth, logoutUser, getUserProfile, ALL_AREAS } from './js/firebase-config.js';
+  const dirty = () => cur.rows.some((r) => String(r.actual).trim() !== '' || String(r.reason).trim() !== '');
+  window.addEventListener('beforeunload', (e) => { if (dirty()) { e.preventDefault(); e.returnValue = ''; } });
 
-    const areaGrid = document.getElementById("areaGrid");
-    const userEmail = document.getElementById("userEmail");
-    const adminSection = document.getElementById("adminSection");
+  async function okToLeave() {
+    if (!dirty()) return true;
+    return confirmBox({ title: 'Discard entries?', message: 'You have entered quantities that are not submitted yet. Discard them?', okLabel: 'Discard', danger: true });
+  }
 
-    checkAuth(async (user) => {
-      if (!user) {
-        window.location.href = "index.html";
-        return;
-      }
+  /* ---- choose department and line ---- */
+  dep.onchange = async () => {
+    if (!(await okToLeave())) { dep.value = cur.dept; return; }
+    cur.dept = dep.value; cur.line = ''; cur.rows = []; cur.stations = [];
+    line.innerHTML = '<option value="">Select line</option>'; line.disabled = true; sheet.innerHTML = '';
+    if (!cur.dept) return;
+    sheet.innerHTML = '<section class="panel"><div class="empty">Loading stations…</div></section>';
+    try { cur.stations = await listStationsByDepartment(cur.dept); }
+    catch (e) { sheet.innerHTML = `<section class="panel"><div class="empty"><b>Could not load stations.</b><p>${esc(friendlyError(e))}</p></div></section>`; return; }
+    if (dep.value !== cur.dept) return;
+    const lines = [...new Set(cur.stations.map((s) => s.line))];
+    if (!lines.length) { sheet.innerHTML = '<section class="panel"><div class="empty">No stations are set up for this department yet. An administrator can add them under Admin Control.</div></section>'; return; }
+    line.innerHTML = '<option value="">Select line</option>' + lines.map((l) => `<option>${esc(l)}</option>`).join('');
+    line.disabled = false; sheet.innerHTML = '';
+  };
 
-      userEmail.textContent = user.email;
+  line.onchange = async () => {
+    if (!(await okToLeave())) { line.value = cur.line; return; }
+    cur.line = line.value; cur.rows = [];
+    if (!cur.line) { sheet.innerHTML = ''; return; }
+    renderSheet();
+    const last = await getLatestCheck(cur.dept, cur.line);
+    const el = sheet.querySelector('#last');
+    if (!el || cur.line !== line.value) return;
+    const when = last?.createdAt?.toDate?.();
+    el.textContent = last && when ? `Last check ${fmt(when)} by ${last.name}: ${last.okCount} OK, ${last.notOkCount} Not OK.` : 'No check has been saved for this line yet.';
+  };
 
-      const profile = await getUserProfile(user.uid);
-
-      if (!profile) {
-        areaGrid.innerHTML = `<div class="no-access">Your account is not fully set up. Contact Admin.</div>`;
-        return;
-      }
-
-      // Show Admin button if user is admin
-      if (profile.role === "admin") {
-        adminSection.style.display = "block";
-      }
-
-      // Get allowed areas
-      let areasToShow = [];
-      if (profile.role === "admin") {
-        areasToShow = ALL_AREAS; // Admin sees all
-      } else {
-        areasToShow = profile.allowedAreas || [];
-      }
-
-      if (areasToShow.length === 0) {
-        areaGrid.innerHTML = `<div class="no-access">No areas assigned to you.<br>Please contact Admin.</div>`;
-        return;
-      }
-
-      // Create cards
-      areaGrid.innerHTML = areasToShow.map(area => `
-        <div class="card" onclick="window.location.href='dashboard.html?area=${encodeURIComponent(area)}'">
-          <h3>${area}</h3>
-          <p>View Dashboard</p>
-        </div>
-      `).join('');
+  /* ---- the check sheet ---- */
+  function renderSheet() {
+    cur.rows = cur.stations.filter((s) => s.line === cur.line).map((s) => ({ ...s, actual: '', reason: '', state: 'empty' }));
+    sheet.innerHTML = `
+      <section class="panel">
+        <div class="sheet-head"><b>${esc(cur.line)}</b><div class="hint" id="last">Checking the last saved result…</div></div>
+        <div class="tbl-wrap"><table class="tbl chk"><thead><tr>
+          <th>Station</th><th class="num">Min</th><th class="num">Max</th><th>Actual quantity</th><th>Result</th><th>Reason if Not OK</th>
+        </tr></thead><tbody id="rows">${cur.rows.map((r, i) => `
+          <tr data-i="${i}">
+            <td data-label="Station"><b>${esc(r.stationName)}</b>${r.stationCode ? `<small>${esc(r.stationCode)}</small>` : ''}</td>
+            <td class="num" data-label="Min">${esc(r.min)}</td>
+            <td class="num" data-label="Max">${esc(r.max)}</td>
+            <td data-label="Actual quantity"><input class="act" type="number" inputmode="numeric" min="0" step="1" aria-label="Actual quantity at ${esc(r.stationName)}"></td>
+            <td class="res" data-label="Result"><span class="badge">-</span></td>
+            <td class="reason" data-label="Reason"><span class="none">-</span><input class="why" type="text" maxlength="200" placeholder="Why is it out of range?" aria-label="Reason for ${esc(r.stationName)}"></td>
+          </tr>`).join('')}</tbody></table></div>
+      </section>
+      <div class="submitbar">
+        <div class="stats" id="stats"></div>
+        <div class="submit-side"><span class="submit-msg" id="msg" role="alert"></span>
+          <button type="button" class="btn btn-primary" id="submit">Submit check</button></div>
+      </div>`;
+    const tb = sheet.querySelector('#rows');
+    tb.addEventListener('input', (e) => {
+      const tr = e.target.closest('tr'); if (!tr) return;
+      const r = cur.rows[Number(tr.dataset.i)];
+      if (e.target.classList.contains('act')) r.actual = e.target.value; else r.reason = e.target.value;
+      update(tr, r); stats();
+      sheet.querySelector('#msg').textContent = '';
     });
+    sheet.querySelector('#submit').onclick = submit;
+    stats();
+  }
 
-    document.getElementById("logoutBtn").addEventListener("click", async () => {
-      await logoutUser();
-      window.location.href = "index.html";
+  // The check itself: OK when min <= actual <= max (both limits included)
+  function judge(r) {
+    const v = String(r.actual).trim();
+    if (v === '') return 'empty';
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 0) return 'invalid';
+    return n >= r.min && n <= r.max ? 'ok' : 'bad';
+  }
+
+  function update(tr, r) {
+    r.state = judge(r);
+    const badge = tr.querySelector('.res'), act = tr.querySelector('.act'), why = tr.querySelector('.why');
+    tr.classList.toggle('bad', r.state === 'bad');
+    const side = r.state === 'bad' ? (Number(r.actual) < r.min ? 'Below minimum' : 'Above maximum') : r.state === 'invalid' ? 'Whole number, 0 or more' : '';
+    badge.innerHTML = r.state === 'ok' ? '<span class="badge ok">OK</span>'
+      : r.state === 'bad' ? `<span class="badge bad">Not OK</span><small>${side}</small>`
+      : r.state === 'invalid' ? `<span class="badge bad">Check value</span><small>${side}</small>`
+      : '<span class="badge">-</span>';
+    if (r.state !== 'invalid') act.classList.remove('invalid');
+    if (r.state !== 'bad' || r.reason.trim().length >= 3) why.classList.remove('invalid');
+  }
+
+  function stats() {
+    const n = cur.rows.length, c = (k) => cur.rows.filter((r) => r.state === k).length;
+    const entered = n - c('empty');
+    sheet.querySelector('#stats').innerHTML =
+      `<span class="stat">Entered ${entered} of ${n}</span><span class="stat ok">OK ${c('ok')}</span><span class="stat bad">Not OK ${c('bad')}</span>`;
+  }
+
+  /* ---- submit ---- */
+  async function submit() {
+    if (cur.busy) return;
+    const msg = sheet.querySelector('#msg'); msg.textContent = '';
+    const trs = [...sheet.querySelectorAll('#rows tr')];
+    let first = null, missing = 0, reasons = 0;
+    trs.forEach((tr, i) => {
+      const r = cur.rows[i];
+      if (r.state === 'empty' || r.state === 'invalid') { tr.querySelector('.act').classList.add('invalid'); missing++; first ||= tr.querySelector('.act'); }
+      else if (r.state === 'bad' && r.reason.trim().length < 3) { tr.querySelector('.why').classList.add('invalid'); reasons++; first ||= tr.querySelector('.why'); }
     });
-  </script>
+    if (missing || reasons) {
+      msg.textContent = [missing ? `Enter a valid quantity for ${missing} station${missing > 1 ? 's' : ''}.` : '', reasons ? `Add a reason for ${reasons} Not OK station${reasons > 1 ? 's' : ''}.` : ''].filter(Boolean).join(' ');
+      first.scrollIntoView({ block: 'center', behavior: 'smooth' }); first.focus({ preventScroll: true });
+      return;
+    }
+    const ok = cur.rows.filter((r) => r.state === 'ok').length, bad = cur.rows.length - ok;
+    const yes = await confirmBox({
+      title: 'Submit inventory check',
+      message: `${cur.dept}, ${cur.line}: ${cur.rows.length} stations, ${ok} OK, ${bad} Not OK. You cannot edit a check after it is submitted.`,
+      okLabel: 'Submit'
+    });
+    if (!yes) return;
+    cur.busy = true; const btn = sheet.querySelector('#submit'); btn.disabled = true;
+    try {
+      const items = cur.rows.map((r) => ({
+        stationId: r.id, stationName: r.stationName, stationCode: r.stationCode || '', min: r.min, max: r.max,
+        actual: Number(r.actual), status: r.state === 'ok' ? 'OK' : 'Not OK', reason: r.state === 'bad' ? r.reason.trim() : ''
+      }));
+      const saved = await saveInventoryCheck({ department: cur.dept, line: cur.line, items, name: ctx.name, employeeId: ctx.employeeId });
+      cur.rows = []; renderSheet();
+      sheet.querySelector('#last').textContent = `Last check ${fmt(saved.createdAt)} by ${ctx.name}: ${saved.okCount} OK, ${saved.notOkCount} Not OK.`;
+      toast('Inventory check saved.');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (e) {
+      sheet.querySelector('#msg').textContent = friendlyError(e); btn.disabled = false;
+    }
+    cur.busy = false;
+  }
+</script>
 </body>
 </html>
