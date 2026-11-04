@@ -5,8 +5,27 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#0b1220">
   <title>Admin Control | Production WIP Audit</title>
+  <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+  <link rel="modulepreload" href="js/wip-core.js">
+  <link rel="modulepreload" href="js/firebase-config.js">
+  <style>
+    html,body{margin:0;background:#0b1220}
+    #boot{position:fixed;inset:0;display:grid;place-items:center;text-align:center;background:linear-gradient(135deg,#0b1220,#12304f);color:#cbd5e1;font:15px 'Segoe UI',system-ui,sans-serif}
+    #boot i{display:block;width:34px;height:34px;margin:0 auto 14px;border-radius:50%;border:3px solid rgba(255,255,255,.2);border-top-color:#4ade80;animation:bootspin .8s linear infinite}
+    #boot p{margin-top:10px;max-width:300px;font-size:13.5px;color:#94a3b8}
+    @keyframes bootspin{to{transform:rotate(360deg)}}
+    @media (prefers-reduced-motion:reduce){#boot i{animation:none}}
+  </style>
 </head>
 <body>
+<div id="boot" role="status"><div><i></i>Loading Production WIP Audit…</div></div>
+<script>
+  // If loading takes unusually long, say what to do instead of staying silent
+  setTimeout(function () {
+    var b = document.getElementById('boot');
+    if (b) b.firstElementChild.insertAdjacentHTML('beforeend', '<p>This is taking longer than usual. Check your internet connection, then reload the page.</p>');
+  }, 12000);
+</script>
 <script type="module">
   import {
     startPage, icon, esc, toast, openModal, confirmBox, friendlyError, DEPARTMENTS,
@@ -55,13 +74,17 @@
 
   const errorBox = (e) => `<div class="empty"><b>Could not load data.</b><p>${esc(friendlyError(e))}</p></div>`;
 
-  async function load(which) {
-    try {
-      if (which === 'users') state.users = await listUsers();
-      else state.stations = await listStations();
-      state.loaded[which === 'users' ? 'users' : 'stations'] = true;
-      return null;
-    } catch (e) { return e; }
+  // One read per collection, even if two parts of the page ask at the same time
+  const inflight = {};
+  function load(which) {
+    return inflight[which] || (inflight[which] = (async () => {
+      try {
+        if (which === 'users') state.users = await listUsers();
+        else state.stations = await listStations();
+        state.loaded[which === 'users' ? 'users' : 'stations'] = true;
+        return null;
+      } catch (e) { delete inflight[which]; return e; }
+    })());
   }
 
   /* ---------- Excel helpers ---------- */

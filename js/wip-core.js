@@ -4,15 +4,25 @@
    every page you add later): login guard, page layout, database helpers.
    ===================================================================== */
 import * as base from './firebase-config.js';
-import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
-import {
-  getAuth, onAuthStateChanged, signOut, createUserWithEmailAndPassword,
-  EmailAuthProvider, reauthenticateWithCredential, updatePassword
-} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
-import {
-  getFirestore, doc, collection, getDoc, getDocs, setDoc, updateDoc, deleteDoc,
-  writeBatch, serverTimestamp
-} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+
+/* Load Firebase from the SAME version that js/firebase-config.js already uses, so the browser
+   downloads it only once (two different versions would mean two full downloads). */
+const SDK_FALLBACK = '10.12.2';
+async function sdkVersion() {
+  try {
+    const r = await fetch(new URL('./firebase-config.js', import.meta.url));
+    const m = (await r.text()).match(/firebasejs\/(\d+\.\d+\.\d+)\//);
+    return m ? m[1] : SDK_FALLBACK;
+  } catch { return SDK_FALLBACK; }
+}
+const SDK = `https://www.gstatic.com/firebasejs/${await sdkVersion()}/`;
+const [{ initializeApp }, A, F] = await Promise.all([
+  import(SDK + 'firebase-app.js'), import(SDK + 'firebase-auth.js'), import(SDK + 'firebase-firestore.js')
+]);
+const { getAuth, onAuthStateChanged, signOut, createUserWithEmailAndPassword,
+        EmailAuthProvider, reauthenticateWithCredential, updatePassword } = A;
+const { getFirestore, initializeFirestore, doc, collection, getDoc, getDocs, setDoc, updateDoc,
+        deleteDoc, writeBatch, serverTimestamp } = F;
 
 /* ---------- Settings you may want to change ---------- */
 // Same value as in index.html. An employee ID "12345" logs in as 12345@wipaudit.local
@@ -166,7 +176,10 @@ try {
   if (!cfg) throw new Error('CONFIG_NOT_FOUND');
   app = initializeApp(cfg);
   auth = getAuth(app);
-  db = getFirestore(app);
+  try {
+    // Falls back to long polling by itself on company networks/proxies that block streaming
+    db = initializeFirestore(app, { experimentalAutoDetectLongPolling: true });
+  } catch { db = getFirestore(app); } // already started by firebase-config.js
 } catch (e) { initError = e; }
 export { auth, db };
 
