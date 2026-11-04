@@ -82,7 +82,8 @@
   function load(which) {
     return inflight[which] || (inflight[which] = (async () => {
       try {
-        if (which === 'users') state.users = await listUsers();
+        // departments must be a list; profiles made by hand may hold plain text
+      if (which === 'users') state.users = (await listUsers()).map((u) => ({ ...u, departments: Array.isArray(u.departments) ? u.departments : (u.departments ? [String(u.departments)] : []) }));
         else state.stations = await listStations();
         state.loaded[which === 'users' ? 'users' : 'stations'] = true;
         return null;
@@ -207,7 +208,7 @@
       title: edit ? 'Edit user' : 'Add user',
       html: `<form id="uf" class="fg" autocomplete="off">
         <div class="full"><label class="l" for="f_name">Employee name</label><input id="f_name" value="${esc(u?.name || '')}"></div>
-        <div><label class="l" for="f_id">User ID (employee ID)</label><input id="f_id" value="${esc(u?.employeeId || '')}" ${edit ? 'disabled' : ''} inputmode="numeric"></div>
+        <div><label class="l" for="f_id">User ID (employee ID)</label><input id="f_id" value="${esc(u?.employeeId || '')}" ${edit && u.employeeId ? 'disabled' : ''} inputmode="numeric">${edit && !u.employeeId ? '<div class="hint">This profile has no ID yet. Enter it here.</div>' : ''}</div>
         <div><label class="l" for="f_role">Role</label><select id="f_role" ${me ? 'disabled' : ''}><option value="user" ${u?.role !== 'admin' ? 'selected' : ''}>User</option><option value="admin" ${u?.role === 'admin' ? 'selected' : ''}>Admin</option></select>${me ? '<div class="hint">You cannot change your own role.</div>' : ''}</div>
         ${edit ? '' : `<div class="full"><label class="l" for="f_pw">Starting password</label><div class="row"><input id="f_pw" type="text" autocomplete="off"><button type="button" class="btn btn-ghost" id="f_gen">Generate</button></div><div class="hint">Tell the user this password. They will be asked to change it after signing in.</div></div>`}
         <div><label class="l" for="f_d1">Access department 1</label><select id="f_d1">${opts(DEPARTMENTS, d1)}</select></div>
@@ -227,12 +228,13 @@
       const departments = a === 'All' ? ['All'] : [...new Set([a, b].filter(Boolean))];
       const err = $('f_err'); err.textContent = '';
       if (!name) { err.textContent = 'Enter the employee name.'; return; }
-      if (!id || /\s/.test(id)) { err.textContent = 'Enter the user ID without spaces.'; return; }
+      const idEditable = !$('f_id').disabled;
+      if (idEditable && (!id || /\s/.test(id))) { err.textContent = 'Enter the user ID without spaces.'; return; }
       if (!departments.length) { err.textContent = 'Choose at least one access department.'; return; }
       btn.disabled = true; x.locked = true;
       try {
         if (edit) {
-          const data = { name, departments, ...(me ? {} : { role }) };
+          const data = { name, departments, ...(me ? {} : { role }), ...(idEditable ? { employeeId: id } : {}) };
           await updateUser(u.uid, data); Object.assign(u, data);
         } else {
           const password = $('f_pw').value;
