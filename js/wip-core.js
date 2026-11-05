@@ -657,20 +657,28 @@ export async function getLatestCheck(dept, line) {
 }
 
 // items: [{ stationId, stationName, stationCode, min, max, actual, status: 'OK' | 'Not OK', reason }]
-export async function saveInventoryCheck({ department, line, items, name, employeeId }) {
+// dateKey: optional check date "YYYY-MM-DD" (past-dated entry). Default is today.
+// extra: optional extra fields stored on the record (for example { imported: true, importBatch })
+export async function saveInventoryCheck({ department, line, items, name, employeeId, dateKey = null, extra = {} }) {
   const okCount = items.filter((i) => i.status === 'OK').length;
   const now = new Date(), p = (n) => String(n).padStart(2, '0');
+  const today = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(dateKey || '')) ? dateKey : today;
   const record = {
     department, line, lineKey: lineKey(department, line),
     uid: auth.currentUser.uid, name, employeeId,
     items, total: items.length, okCount, notOkCount: items.length - okCount,
-    dateKey: `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`,
+    totalQty: items.reduce((a, i) => a + (Number(i.actual) || 0), 0),
+    dateKey: day, backdated: day !== today, ...extra,
     createdAt: serverTimestamp()
   };
   const ref = doc(collection(db, 'inventoryChecks'));
   const batch = writeBatch(db);
   batch.set(ref, record);                                                        // full history
-  batch.set(doc(db, 'inventoryLatest', record.lineKey), { ...record, checkId: ref.id }); // newest per line
+  // "latest" must stay the newest check DATE, so an older check never replaces a newer one
+  let newest = true;
+  if (day !== today) { const cur = await getLatestCheck(department, line); newest = !cur || String(cur.dateKey || '') <= day; }
+  if (newest) batch.set(doc(db, 'inventoryLatest', record.lineKey), { ...record, checkId: ref.id });
   await batch.commit();
   return { id: ref.id, ...record, createdAt: now };
 }
@@ -700,6 +708,11 @@ export async function writeStations(stations, { replace = false, onProgress } = 
 }
 /* ---------- Inventory History (Admin) ---------- */
 
+// The check date (what the audit is about), not the upload time
+export const checkDay = (c) => c.dateKey ? new Date(c.dateKey + 'T00:00:00') : (c.createdAt?.toDate?.() || new Date(0));
+const byNewest = (a, b) => (checkDay(b) - checkDay(a)) ||
+  ((b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+
 export async function listInventoryChecks({ department = null, line = null, fromDate = null, toDate = null } = {}) {
   const snap = await getDocs(collection(db, 'inventoryChecks'));
   let list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -710,26 +723,16 @@ export async function listInventoryChecks({ department = null, line = null, from
   if (fromDate) {
     const from = new Date(fromDate);
     from.setHours(0, 0, 0, 0);
-    list = list.filter(c => {
-      const d = c.createdAt?.toDate?.() || (c.dateKey ? new Date(c.dateKey) : new Date(0));
-      return d >= from;
-    });
+    list = list.filter(c => checkDay(c) >= from);
   }
   if (toDate) {
     const to = new Date(toDate);
     to.setHours(23, 59, 59, 999);
-    list = list.filter(c => {
-      const d = c.createdAt?.toDate?.() || (c.dateKey ? new Date(c.dateKey) : new Date(0));
-      return d <= to;
-    });
+    list = list.filter(c => checkDay(c) <= to);
   }
 
-  // Newest first
-  list.sort((a, b) => {
-    const da = a.createdAt?.toDate?.() || (a.dateKey ? new Date(a.dateKey) : new Date(0));
-    const db = b.createdAt?.toDate?.() || (b.dateKey ? new Date(b.dateKey) : new Date(0));
-    return db - da;
-  });
+  // Newest check date first
+  list.sort(byNewest);
 
   return list;
 }
@@ -788,11 +791,7 @@ export async function deleteInventoryCheck(id) {
       const sameLine = allSnap.docs
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(c => c.lineKey === check.lineKey)
-        .sort((a, b) => {
-          const da = a.createdAt?.toDate?.() || (a.dateKey ? new Date(a.dateKey) : new Date(0));
-          const db = b.createdAt?.toDate?.() || (b.dateKey ? new Date(b.dateKey) : new Date(0));
-          return db - da;
-        });
+        .sort(byNewest);
 
       if (sameLine.length > 0) {
         const next = sameLine[0];
@@ -807,4 +806,23 @@ export async function deleteInventoryCheck(id) {
   } catch (e) {
     console.warn('Could not update inventoryLatest after delete', e);
   }
+}
+// Deletes many checks at once (400 per batch), then repairs the "latest" record of every affected line
+export async function deleteInventoryChecksBulk(ids, onProgress) {
+  const all = (await getDocs(collection(db, 'inventoryChecks'))).docs.map((d) => ({ id: d.id, ...d.data() }));
+  const gone = new Set(ids), byId = new Map(all.map((c) => [c.id, c]));
+  const lines = new Set(ids.map((id) => byId.get(id)?.lineKey).filter(Boolean));
+  for (let i = 0; i < ids.length; i += 400) {
+    const batch = writeBatch(db);
+    ids.slice(i, i + 400).forEach((id) => batch.delete(doc(db, 'inventoryChecks', id)));
+    await batch.commit();
+    onProgress?.(Math.min(i + 400, ids.length), ids.length);
+  }
+  for (const lk of lines) {
+    const left = all.filter((c) => c.lineKey === lk && !gone.has(c.id)).sort(byNewest);
+    const ref = doc(db, 'inventoryLatest', lk);
+    if (left.length) { const { id, ...rest } = left[0]; await setDoc(ref, { ...rest, checkId: id }); }
+    else await deleteDoc(ref);
+  }
+  return ids.length;
 }
