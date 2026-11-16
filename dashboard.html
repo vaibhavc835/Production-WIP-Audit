@@ -3,169 +3,472 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0b1220">
   <title>Dashboard | Production WIP Audit</title>
+  <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+  <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+  <link rel="modulepreload" href="js/wip-core.js">
+  <link rel="modulepreload" href="js/firebase-config.js">
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', system-ui, sans-serif; }
-    body { background: #f1f5f9; min-height: 100vh; }
-    header {
-      background: #0f172a;
-      color: white;
-      padding: 14px 24px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    header h1 { font-size: 17px; }
-    .back-btn, .logout-btn {
-      background: #334155;
-      color: white;
-      border: none;
-      padding: 7px 14px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 13px;
-      margin-left: 8px;
-    }
-    .back-btn:hover, .logout-btn:hover { background: #475569; }
-    .container { max-width: 1000px; margin: 30px auto; padding: 0 20px; }
-    .page-title { margin-bottom: 20px; }
-    .page-title h2 { font-size: 22px; color: #0f172a; }
-    .page-title p { color: #64748b; font-size: 14px; margin-top: 4px; }
-    .card {
-      background: white;
-      border-radius: 12px;
-      padding: 20px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-      border: 1px solid #e2e8f0;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 14px;
-    }
-    th {
-      background: #f8fafc;
-      text-align: left;
-      padding: 12px 14px;
-      color: #475569;
-      font-weight: 600;
-      border-bottom: 1px solid #e2e8f0;
-    }
-    td {
-      padding: 12px 14px;
-      border-bottom: 1px solid #f1f5f9;
-    }
-    .status {
-      display: inline-block;
-      padding: 3px 10px;
-      border-radius: 20px;
-      font-size: 12px;
-      font-weight: 600;
-    }
-    .status.ok { background: #dcfce7; color: #166534; }
-    .status.high { background: #fee2e2; color: #991b1b; }
-    .status.low { background: #fef3c7; color: #92400e; }
-    .empty {
-      text-align: center;
-      padding: 40px;
-      color: #64748b;
-    }
-    .note {
-      margin-top: 16px;
-      font-size: 13px;
-      color: #64748b;
-    }
+    html,body{margin:0;background:#0b1220}
+    #boot{position:fixed;inset:0;display:grid;place-items:center;text-align:center;background:linear-gradient(135deg,#0b1220,#12304f);color:#cbd5e1;font:15px 'Segoe UI',system-ui,sans-serif}
+    #boot i{display:block;width:34px;height:34px;margin:0 auto 14px;border-radius:50%;border:3px solid rgba(255,255,255,.2);border-top-color:#4ade80;animation:bootspin .8s linear infinite}
+    #boot p{margin-top:10px;max-width:300px;font-size:13.5px;color:#94a3b8}
+    @keyframes bootspin{to{transform:rotate(360deg)}}
+    @media (prefers-reduced-motion:reduce){#boot i{animation:none}}
   </style>
 </head>
 <body>
+<div id="boot" role="status"><div><i></i>Loading Production WIP Audit…</div></div>
+<script>
+  setTimeout(function () {
+    var b = document.getElementById('boot');
+    if (b) b.firstElementChild.insertAdjacentHTML('beforeend', '<p>This is taking longer than usual. Check your internet connection, then reload the page.</p>');
+  }, 12000);
+</script>
+<script type="module">
+  import { startPage, icon, esc, toast, friendlyError, listInventoryChecks } from './js/wip-core.js';
 
-  <header>
-    <h1 id="areaTitle">Loading...</h1>
-    <div>
-      <button class="back-btn" onclick="window.location.href='home.html'">← Back</button>
-      <button class="logout-btn" id="logoutBtn">Logout</button>
+  const ctx = await startPage({ active: 'dashboard', title: 'Dashboard' });
+  const main = ctx.main;
+
+  /* ---------- Look (chart colours follow the app: blue series, green/red for OK / Not OK) ---------- */
+  const C = { blue: '#2a78d6', orange: '#eb6834', aqua: '#1baf7a', good: '#0ca30c', bad: '#d03b3b',
+              ink: '#0b0b0b', ink2: '#52514e', muted: '#898781', grid: '#e1e0d9', surface: '#ffffff' };
+
+  const st = document.createElement('style');
+  st.textContent = `
+  .dsh [hidden]{display:none!important}
+  .dsh .page-head{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between}
+  .dsh .tabs{display:flex;gap:8px;overflow-x:auto;padding:14px 0 4px;margin-top:6px;scrollbar-width:thin}
+  .dsh .tabs button{flex:none;padding:8px 16px;border-radius:999px;border:1px solid var(--line);background:#fff;font-weight:600;font-size:14px;color:var(--ink2);white-space:nowrap}
+  .dsh .tabs button:hover{background:#f1f5f9}
+  .dsh .tabs button.on{background:var(--navy);border-color:var(--navy);color:#fff}
+  .dsh .tabs button small{font-weight:500;opacity:.7;margin-left:6px;font-size:11.5px}
+  .dsh .filters{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:14px 0 4px}
+  .dsh .filters select{width:auto;min-width:150px}
+  .dsh .filters .grow{flex:1}
+  #capture{background:var(--paper);padding:4px 0 8px}
+  .dsh .cap-head h2{font-size:20px;letter-spacing:-.2px}
+  .dsh .cap-head p{color:var(--muted);font-size:13px;margin-top:2px}
+  .dsh .kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-top:14px}
+  .dsh .kpi{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 16px;min-width:0}
+  .dsh .kpi span{display:block;color:var(--muted);font-size:12.5px}
+  .dsh .kpi b{display:block;font-size:26px;line-height:1.15;margin-top:4px;font-variant-numeric:tabular-nums}
+  .dsh .kpi small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
+  .dsh .row2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+  .dsh .row1{margin-top:14px}
+  .dsh .cc{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px 16px 12px;min-width:0}
+  .dsh .cc-h{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+  .dsh .cc h3{font-size:15px;line-height:1.3}
+  .dsh .cc p.sub{color:var(--muted);font-size:12.5px;margin-top:2px}
+  .dsh .cc .tgl{flex:none;font-size:12px;padding:3px 9px;border-radius:6px;border:1px solid var(--line);color:var(--ink2);background:#fff}
+  .dsh .cc .tgl:hover{background:#f1f5f9}
+  .dsh .cv{position:relative;margin-top:10px}
+  .dsh .tv{margin-top:10px;max-height:320px;overflow:auto}
+  .dsh .tv table,.dsh .rt{width:100%;border-collapse:collapse;font-size:13px}
+  .dsh .tv th,.dsh .tv td,.dsh .rt th,.dsh .rt td{padding:6px 8px;border-bottom:1px solid #eef2f6;text-align:left}
+  .dsh .tv th,.dsh .rt th{color:var(--muted);font-weight:600;background:#f8fafc;position:sticky;top:0}
+  .dsh .tv td.n,.dsh .rt td.n,.dsh .tv th.n,.dsh .rt th.n{text-align:right;font-variant-numeric:tabular-nums}
+  .dsh .nodata{padding:46px 10px;text-align:center;color:var(--muted);font-size:14px}
+  .dsh .tag{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;padding:2px 8px;border-radius:999px}
+  .dsh .tag.bad{background:#fee2e2;color:#991b1b}
+  .dsh .soon{padding:46px 20px;text-align:center}
+  .dsh .soon .ico{width:56px;height:56px;border-radius:14px;background:var(--navy);color:var(--mint);display:grid;place-items:center;margin:0 auto 14px}
+  .dsh .soon .ico svg{width:28px;height:28px}
+  .dsh .soon h3{font-size:18px}
+  .dsh .soon p{color:var(--muted);max-width:52ch;margin:8px auto 0}
+  .dsh .mods{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:10px}
+  .dsh .mod{border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:13.5px;background:#fff}
+  .dsh .mod small{display:block;color:var(--muted);font-size:12px}
+  .dsh .mod.live{border-color:#86efac;background:#f0fdf4}
+  .dsh .tools{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:22px}
+  .dsh .tools .cc h3{margin-bottom:4px}
+  .dsh .tools .fg{margin-top:12px}
+  .dsh .tools .row{margin-top:14px;flex-wrap:wrap}
+  @media (max-width:1000px){.dsh .kpis{grid-template-columns:repeat(3,1fr)}.dsh .mods{grid-template-columns:repeat(3,1fr)}}
+  @media (max-width:860px){.dsh .row2,.dsh .tools{grid-template-columns:1fr}}
+  @media (max-width:560px){.dsh .rt td,.dsh .rt th{white-space:nowrap}.dsh .kpis{grid-template-columns:repeat(2,1fr);gap:10px}.dsh .kpi b{font-size:22px}.dsh .mods{grid-template-columns:repeat(2,1fr)}.dsh .filters select{flex:1 1 140px;min-width:0}}
+  `;
+  document.head.appendChild(st);
+
+  /* ---------- Libraries (loaded only when needed) ---------- */
+  const LIBS = {
+    chart: ['https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js', () => window.Chart],
+    xlsx: ['https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js', () => window.XLSX],
+    h2c: ['https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js', () => window.html2canvas],
+    pdf: ['https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js', () => window.jspdf]
+  };
+  const libP = {};
+  const lib = (k) => libP[k] || (libP[k] = new Promise((res, rej) => {
+    const [url, get] = LIBS[k];
+    if (get()) return res(get());
+    const s = document.createElement('script');
+    s.src = url; s.onload = () => res(get());
+    s.onerror = () => { delete libP[k]; rej(new Error('Could not load a required component. Check your internet connection and retry.')); };
+    document.head.appendChild(s);
+  }));
+
+  /* ---------- Data ---------- */
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const localKey = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const monthName = (m) => m ? `${MON[+m.slice(5, 7) - 1]} ${m.slice(0, 4)}` : '';
+  const dayName = (k) => k ? `${+k.slice(8, 10)} ${MON[+k.slice(5, 7) - 1]} ${k.slice(0, 4)}` : '-';
+  const pct = (ok, n) => n ? Math.round((ok / n) * 1000) / 10 : null;
+  const person = (c) => String(c.name || '').replace(/\s*\(Import\)\s*$/, '');
+
+  let all = [], loadError = null;
+  const seeAll = ctx.isAdmin || ctx.departments.includes('All');
+  try {
+    const [list] = await Promise.all([listInventoryChecks(), lib('chart').catch(() => null)]);
+    all = list.filter((c) => seeAll || ctx.departments.includes(c.department)).map((c) => {
+      const day = c.dateKey || (c.createdAt?.toDate ? localKey(c.createdAt.toDate()) : '');
+      return { ...c, day, month: day.slice(0, 7), items: Array.isArray(c.items) ? c.items : [] };
+    }).filter((c) => c.day);
+  } catch (e) { loadError = e; }
+
+  const monthsAll = [...new Set(all.map((c) => c.month))].sort().reverse();
+  const deptsAll = [...new Set(all.map((c) => c.department))].sort();
+
+  const f = { month: '', dept: '', line: '' };
+  const filtered = () => all.filter((c) => (!f.month || c.month === f.month) && (!f.dept || c.department === f.dept) && (!f.line || c.line === f.line));
+  const flat = (list) => list.flatMap((c) => c.items.map((i) => ({ c, i, ok: i.status === 'OK' })));
+
+  const tally = (rows, keyFn) => {
+    const m = new Map();
+    rows.forEach((r) => { const k = keyFn(r); if (k == null) return; const t = m.get(k) || { ok: 0, bad: 0, n: 0 }; r.ok ? t.ok++ : t.bad++; t.n++; m.set(k, t); });
+    return m;
+  };
+
+  /* ---------- Sections ---------- */
+  const SECTIONS = [
+    { key: 'overall', label: 'Overall', live: true },
+    { key: 'inventory', label: 'Inventory', live: true },
+    { key: 'issue', label: 'Issue Report', icon: 'alert' },
+    { key: 'improvement', label: 'Improvement', icon: 'trend' },
+    { key: 'multiskilling', label: 'Multiskilling', icon: 'users' },
+    { key: 'shift', label: 'Shift Schedule', icon: 'calendar' },
+    { key: 'audit', label: 'Audit', icon: 'clipboard' },
+    { key: 'inspection', label: 'Inspection', icon: 'search' },
+    { key: 'psm', label: 'PSM', icon: 'shield' },
+    { key: 'm5', label: '5M', icon: 'layers' }
+  ];
+  let section = 'overall';
+
+  main.classList.add('dsh');
+  main.innerHTML = `
+    <div class="page-head"><div><h1>Dashboard</h1>
+      <p>Charts built from the checks captured in each module.</p></div></div>
+    <nav class="tabs" id="tabs" aria-label="Dashboard sections">
+      ${SECTIONS.map((s) => `<button type="button" data-s="${s.key}">${esc(s.label)}${s.live ? '' : '<small>Soon</small>'}</button>`).join('')}
+    </nav>
+    <div class="filters" id="filters">
+      <select id="fm" aria-label="Month"><option value="">All months</option>${monthsAll.map((m) => `<option value="${m}">${monthName(m)}</option>`).join('')}</select>
+      <select id="fd" aria-label="Department"><option value="">All departments</option>${deptsAll.map((d) => `<option>${esc(d)}</option>`).join('')}</select>
+      <select id="fl" aria-label="Line"><option value="">All lines</option></select>
+      <button type="button" class="btn btn-ghost btn-sm" id="fr">Reset filters</button>
+      <span class="grow"></span>
     </div>
-  </header>
+    <div id="capture"></div>
+    <section class="tools no-cap" id="tools" aria-label="Download and export"></section>`;
+  const cap = main.querySelector('#capture');
 
-  <div class="container">
-    <div class="page-title">
-      <h2 id="areaName">Area Dashboard</h2>
-      <p>Station-wise Min / Max WIP</p>
-    </div>
+  const syncLines = () => {
+    const ls = [...new Set(all.filter((c) => !f.dept || c.department === f.dept).map((c) => c.line))].sort();
+    if (f.line && !ls.includes(f.line)) f.line = '';
+    main.querySelector('#fl').innerHTML = '<option value="">All lines</option>' + ls.map((l) => `<option ${l === f.line ? 'selected' : ''}>${esc(l)}</option>`).join('');
+  };
+  main.querySelector('#fm').onchange = (e) => { f.month = e.target.value; render(); };
+  main.querySelector('#fd').onchange = (e) => { f.dept = e.target.value; syncLines(); render(); };
+  main.querySelector('#fl').onchange = (e) => { f.line = e.target.value; render(); };
+  main.querySelector('#fr').onclick = () => { f.month = f.dept = f.line = ''; ['fm', 'fd'].forEach((id) => { main.querySelector('#' + id).value = ''; }); syncLines(); render(); };
+  main.querySelectorAll('#tabs button').forEach((b) => { b.onclick = () => { location.hash = b.dataset.s; }; });
+  window.addEventListener('hashchange', route);
+  function route() {
+    const h = location.hash.replace('#', '');
+    section = SECTIONS.some((s) => s.key === h) ? h : 'overall';
+    main.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.s === section));
+    main.querySelector('#filters').hidden = !SECTIONS.find((s) => s.key === section).live;
+    render();
+  }
 
-    <div class="card">
-      <table>
-        <thead>
-          <tr>
-            <th>Station</th>
-            <th>Min</th>
-            <th>Max</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody id="stationTable">
-          <tr><td colspan="4" class="empty">Loading stations...</td></tr>
-        </tbody>
-      </table>
-      <p class="note">Note: Actual WIP quantity entry will be added in next version. Currently showing Min/Max setup.</p>
-    </div>
-  </div>
-
-  <script type="module">
-    import { checkAuth, logoutUser, getUserProfile, getStationsByArea } from './js/firebase-config.js';
-
-    // Get area from URL
-    const urlParams = new URLSearchParams(window.location.search);
-    const area = urlParams.get('area');
-
-    if (!area) {
-      window.location.href = "home.html";
+  /* ---------- Chart helpers ---------- */
+  const charts = [];
+  let uid = 0;
+  const valueLabels = {
+    id: 'valueLabels',
+    afterDatasetsDraw(chart, _a, o) {
+      if (!o?.show) return;
+      const horiz = chart.options.indexAxis === 'y', c = chart.ctx;
+      chart.data.datasets.forEach((ds, i) => chart.getDatasetMeta(i).data.forEach((el, j) => {
+        const v = ds.data[j]; if (v == null) return;
+        c.save(); c.fillStyle = C.ink; c.font = '600 12px system-ui,Segoe UI,sans-serif';
+        const t = v + (o.suffix || '');
+        if (horiz) { c.textAlign = 'left'; c.textBaseline = 'middle'; c.fillText(t, el.x + 6, el.y); }
+        else { c.textAlign = 'center'; c.textBaseline = 'bottom'; c.fillText(t, el.x, el.y - 5); }
+        c.restore();
+      }));
     }
-
-    document.getElementById("areaTitle").textContent = area;
-    document.getElementById("areaName").textContent = area;
-
-    checkAuth(async (user) => {
-      if (!user) {
-        window.location.href = "index.html";
-        return;
+  };
+  const axes = (horiz, pctAxis) => {
+    const val = { beginAtZero: true, grid: { color: C.grid }, border: { display: false }, ticks: { color: C.muted, precision: 0 }, ...(pctAxis ? { max: 100, ticks: { color: C.muted, callback: (v) => v + '%' } } : {}) };
+    const narrow = window.innerWidth < 600;
+    const cat = { grid: { display: false }, border: { color: C.grid }, ticks: { color: C.ink2, autoSkip: false, font: { size: narrow ? 11 : 12 },
+      ...(horiz ? { callback(v) { const l = String(this.getLabelForValue(v)); return narrow && l.length > 17 ? l.slice(0, 16) + '…' : l; } }
+                : { maxRotation: narrow ? 50 : 0, minRotation: narrow ? 40 : 0 }) } };
+    return horiz ? { x: val, y: cat } : { x: cat, y: val };
+  };
+  const baseOpts = ({ horiz = false, pctAxis = false, legend = false, labels = null, stacked = false } = {}) => {
+    const sc = axes(horiz, pctAxis);
+    if (stacked) { sc.x.stacked = true; sc.y.stacked = true; }
+    return {
+      indexAxis: horiz ? 'y' : 'x', responsive: true, maintainAspectRatio: false, animation: { duration: 350 },
+      layout: { padding: { top: labels ? 18 : 4, right: horiz && labels ? 36 : 4 } },
+      scales: sc,
+      plugins: {
+        legend: { display: legend, position: 'bottom', labels: { color: C.ink2, usePointStyle: true, pointStyle: 'rectRounded', boxWidth: 10, boxHeight: 10, padding: 14 } },
+        tooltip: { backgroundColor: '#0b1220', padding: 10, boxPadding: 4, titleFont: { weight: '600' } },
+        valueLabels: labels ? { show: true, suffix: labels } : { show: false }
       }
+    };
+  };
+  const barDs = (label, data, color, o = {}) => ({ label, data, backgroundColor: color, borderColor: C.surface, borderWidth: o.stacked ? 2 : 0,
+    borderRadius: o.horiz ? { topRight: 4, bottomRight: 4 } : { topLeft: 4, topRight: 4 }, borderSkipped: false, maxBarThickness: o.thick || 34 });
 
-      const profile = await getUserProfile(user.uid);
+  // A chart card: canvas view plus a table view of the same numbers
+  function chartCard(def) {
+    const id = 'c' + (++uid);
+    const empty = !def.labels.length;
+    const th = `<th>${esc(def.firstCol || '')}</th>` + def.series.map((s) => `<th class="n">${esc(s.table || s.label)}</th>`).join('');
+    const body = def.labels.map((l, i) => `<tr><td>${esc(l)}</td>${def.series.map((s) => `<td class="n">${s.data[i] ?? ''}${s.data[i] != null && def.suffix ? esc(def.suffix) : ''}</td>`).join('')}</tr>`).join('');
+    const html = `<article class="cc" data-cap-card>
+      <div class="cc-h"><div><h3>${esc(def.title)}</h3>${def.sub ? `<p class="sub">${esc(def.sub)}</p>` : ''}</div>
+        ${empty ? '' : `<button type="button" class="tgl no-cap" data-t="${id}" aria-pressed="false">Table</button>`}</div>
+      ${empty ? '<div class="nodata">No data for these filters.</div>' : `
+      <div class="cv" id="${id}v" style="height:${def.height || 280}px"><canvas id="${id}" role="img" aria-label="${esc(def.title)}"></canvas></div>
+      <div class="tv" id="${id}t" hidden><table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table></div>`}
+    </article>`;
+    return { html, draw: () => { if (empty) return; const Ch = window.Chart; if (!Ch) return; charts.push(new Ch(document.getElementById(id), { type: 'bar', data: { labels: def.labels, datasets: def.series.map((s) => s.ds) }, options: def.options, plugins: [valueLabels] })); } };
+  }
 
-      // Security check: user must have access to this area
-      if (profile.role !== "admin") {
-        const allowed = profile.allowedAreas || [];
-        if (!allowed.includes(area)) {
-          alert("You do not have access to this area.");
-          window.location.href = "home.html";
-          return;
-        }
-      }
+  const kpiHtml = (rows, list) => {
+    const ok = rows.filter((r) => r.ok).length, n = rows.length;
+    const last = list.map((c) => c.day).sort().pop();
+    const lines = new Set(list.map((c) => c.department + '|' + c.line)).size;
+    const k = (l, v, s) => `<div class="kpi"><span>${l}</span><b>${v}</b>${s ? `<small>${s}</small>` : ''}</div>`;
+    return `<div class="kpis" data-cap>${k('Compliance', n ? pct(ok, n) + '%' : '-', 'Stations within min and max')}
+      ${k('Checks submitted', list.length, '')}${k('Stations checked', n, '')}${k('Not OK', n - ok, 'Stations outside min and max')}
+      ${k('Lines covered', lines, '')}${k('Last check', last ? dayName(last) : '-', '')}</div>`;
+  };
 
-      // Load stations
-      const stations = await getStationsByArea(area);
-      const tbody = document.getElementById("stationTable");
+  const filterText = () => [f.month ? monthName(f.month) : 'All months', f.dept || 'All departments', f.line || 'All lines'].join(' | ');
+  const capHead = (title) => `<div class="cap-head" data-cap><h2>${esc(title)}</h2><p>${esc(SECTIONS.find((s) => s.key === section).live ? filterText() + ' | ' : '')}Generated ${new Date().toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })} by ${esc(ctx.name)}</p></div>`;
 
-      if (stations.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="4" class="empty">No stations added yet for this area.<br>Admin can add stations from Admin Panel.</td></tr>`;
-        return;
-      }
+  /* ---------- Chart definitions ---------- */
+  const mk = {
+    deptCompliance(rows) {
+      const t = tally(rows, (r) => r.c.department), labels = [...t.keys()].sort(), data = labels.map((k) => pct(t.get(k).ok, t.get(k).n));
+      return chartCard({ title: 'Department-wise compliance', sub: 'Share of stations within min and max', labels, firstCol: 'Department', suffix: '%', series: [{ label: 'Compliance %', data, ds: barDs('Compliance %', data, C.blue) }], options: baseOpts({ pctAxis: true, labels: '%' }) });
+    },
+    deptStatus(rows) {
+      const t = tally(rows, (r) => r.c.department), labels = [...t.keys()].sort();
+      const ok = labels.map((k) => t.get(k).ok), bad = labels.map((k) => t.get(k).bad);
+      return chartCard({ title: 'Department-wise status', sub: 'Stations checked, OK and Not OK', labels, firstCol: 'Department',
+        series: [{ label: '✓ OK', table: 'OK', data: ok, ds: barDs('✓ OK', ok, C.good, { stacked: true }) }, { label: '✕ Not OK', table: 'Not OK', data: bad, ds: barDs('✕ Not OK', bad, C.bad, { stacked: true }) }],
+        options: baseOpts({ legend: true, stacked: true }) });
+    },
+    monthlyStatus(rows) {
+      const t = tally(rows, (r) => r.c.month), keys = [...t.keys()].sort(), labels = keys.map(monthName);
+      const ok = keys.map((k) => t.get(k).ok), bad = keys.map((k) => t.get(k).bad);
+      return chartCard({ title: 'Monthly status', sub: 'Stations checked each month, OK and Not OK', labels, firstCol: 'Month',
+        series: [{ label: '✓ OK', table: 'OK', data: ok, ds: barDs('✓ OK', ok, C.good, { stacked: true }) }, { label: '✕ Not OK', table: 'Not OK', data: bad, ds: barDs('✕ Not OK', bad, C.bad, { stacked: true }) }],
+        options: baseOpts({ legend: true, stacked: true }) });
+    },
+    monthlyCompliance(rows) {
+      const t = tally(rows, (r) => r.c.month), keys = [...t.keys()].sort(), labels = keys.map(monthName), data = keys.map((k) => pct(t.get(k).ok, t.get(k).n));
+      const o = baseOpts({ pctAxis: true });
+      return chartCard({ title: 'Monthly compliance', sub: 'Share of stations within min and max', labels, firstCol: 'Month', suffix: '%',
+        series: [{ label: 'Compliance %', data, ds: { type: 'line', label: 'Compliance %', data, borderColor: C.blue, backgroundColor: C.blue, borderWidth: 2, pointRadius: 4, pointBackgroundColor: C.blue, pointBorderColor: C.surface, pointBorderWidth: 2, tension: 0.25 } }], options: o });
+    },
+    dailyCompliance(rows) {
+      const t = tally(rows, (r) => r.c.day); let keys = [...t.keys()].sort(); keys = keys.slice(-31);
+      const data = keys.map((k) => pct(t.get(k).ok, t.get(k).n));
+      return chartCard({ title: 'Daily compliance', sub: keys.length >= 31 ? 'Latest 31 days with checks' : 'Days with checks', labels: keys.map(dayName), firstCol: 'Date', suffix: '%',
+        series: [{ label: 'Compliance %', data, ds: { type: 'line', label: 'Compliance %', data, borderColor: C.blue, backgroundColor: C.blue, borderWidth: 2, pointRadius: keys.length > 18 ? 3 : 4, pointBackgroundColor: C.blue, pointBorderColor: C.surface, pointBorderWidth: 2, tension: 0.2 } }],
+        options: { ...baseOpts({ pctAxis: true }), scales: { ...baseOpts({ pctAxis: true }).scales, x: { grid: { display: false }, border: { color: C.grid }, ticks: { color: C.muted, maxRotation: 45, autoSkipPadding: 12 } } } } });
+    },
+    lineStatus(rows) {
+      const showDept = !f.dept, t = tally(rows, (r) => `${r.c.department}|${r.c.line}`);
+      const keys = [...t.keys()].sort((a, b) => (pct(t.get(a).ok, t.get(a).n) - pct(t.get(b).ok, t.get(b).n)) || a.localeCompare(b));
+      const labels = keys.map((k) => { const [d, l] = k.split('|'); return showDept ? `${l} (${d})` : l; });
+      const ok = keys.map((k) => t.get(k).ok), bad = keys.map((k) => t.get(k).bad);
+      return chartCard({ title: 'Line-wise status', sub: 'Lowest compliance first', labels, firstCol: 'Line', height: Math.max(220, labels.length * 34 + 70),
+        series: [{ label: '✓ OK', table: 'OK', data: ok, ds: barDs('✓ OK', ok, C.good, { stacked: true, horiz: true, thick: 20 }) }, { label: '✕ Not OK', table: 'Not OK', data: bad, ds: barDs('✕ Not OK', bad, C.bad, { stacked: true, horiz: true, thick: 20 }) }],
+        options: baseOpts({ horiz: true, legend: true, stacked: true }) });
+    },
+    avgInventory(list) {
+      // Average stock per check: sum of actual quantity over the stations of one check, then the average of those sums
+      const byDept = !f.dept, g = new Map();
+      list.forEach((c) => {
+        const k = byDept ? c.department : c.line, t = g.get(k) || { n: 0, a: 0, mn: 0, mx: 0 };
+        t.n++; c.items.forEach((i) => { t.a += Number(i.actual) || 0; t.mn += Number(i.min) || 0; t.mx += Number(i.max) || 0; }); g.set(k, t);
+      });
+      const labels = [...g.keys()].sort(), avg = (k, p) => Math.round((g.get(k)[p] / g.get(k).n) * 10) / 10;
+      const mn = labels.map((k) => avg(k, 'mn')), ac = labels.map((k) => avg(k, 'a')), mx = labels.map((k) => avg(k, 'mx'));
+      return chartCard({ title: `Average inventory per check, by ${byDept ? 'department' : 'line'}`, sub: 'Total quantity over all stations of one check: actual compared with total min and max', labels, firstCol: byDept ? 'Department' : 'Line', height: 300,
+        series: [{ label: 'Min', data: mn, ds: barDs('Min', mn, C.aqua, { thick: 22 }) }, { label: 'Actual', data: ac, ds: barDs('Actual', ac, C.blue, { thick: 22 }) }, { label: 'Max', data: mx, ds: barDs('Max', mx, C.orange, { thick: 22 }) }],
+        options: baseOpts({ legend: true }) });
+    },
+    topStations(rows) {
+      const t = new Map();
+      rows.filter((r) => !r.ok).forEach((r) => { const k = `${r.i.stationName} (${r.c.line})`; t.set(k, (t.get(k) || 0) + 1); });
+      const top = [...t.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 10);
+      const data = top.map((x) => x[1]);
+      return chartCard({ title: 'Stations most often Not OK', sub: 'Top 10 by number of Not OK checks', labels: top.map((x) => x[0]), firstCol: 'Station', height: Math.max(200, top.length * 34 + 50),
+        series: [{ label: 'Not OK checks', data, ds: barDs('Not OK checks', data, C.bad, { horiz: true, thick: 20 }) }], options: baseOpts({ horiz: true, labels: ' ' }) });
+    }
+  };
 
-      tbody.innerHTML = stations.map(s => `
-        <tr>
-          <td>${s.name}</td>
-          <td>${s.min}</td>
-          <td>${s.max}</td>
-          <td><span class="status ok">Configured</span></td>
-        </tr>
-      `).join('');
+  const notOkTable = (rows, title, sub) => {
+    const bad = rows.filter((r) => !r.ok).sort((a, b) => b.c.day.localeCompare(a.c.day) || (b.c.createdAt?.toMillis?.() || 0) - (a.c.createdAt?.toMillis?.() || 0)).slice(0, 8);
+    return `<article class="cc row1" data-cap><div class="cc-h"><div><h3>${title}</h3><p class="sub">${sub}</p></div></div>
+      ${bad.length ? `<div class="tbl-wrap" style="margin-top:10px"><table class="rt"><thead><tr><th>Date</th><th>Department</th><th>Line</th><th>Station</th><th class="n">Actual</th><th class="n">Min to max</th><th>Reason</th></tr></thead><tbody>
+      ${bad.map((r) => `<tr><td>${dayName(r.c.day)}</td><td>${esc(r.c.department)}</td><td>${esc(r.c.line)}</td><td>${esc(r.i.stationName)}</td><td class="n"><span class="tag bad">✕ ${esc(r.i.actual)}</span></td><td class="n">${esc(r.i.min)} to ${esc(r.i.max)}</td><td>${esc(r.i.reason || '-')}</td></tr>`).join('')}</tbody></table></div>` : '<div class="nodata">No Not OK stations for these filters.</div>'}</article>`;
+  };
+  const reasonsTable = (rows) => {
+    const t = new Map();
+    rows.filter((r) => !r.ok && String(r.i.reason || '').trim()).forEach((r) => { const raw = String(r.i.reason).trim(), k = raw.toLowerCase(); const e = t.get(k) || { raw, n: 0 }; e.n++; t.set(k, e); });
+    const top = [...t.values()].sort((a, b) => b.n - a.n).slice(0, 8);
+    return `<article class="cc row1" data-cap><div class="cc-h"><div><h3>Top reasons for Not OK</h3><p class="sub">Most repeated reasons entered by users</p></div></div>
+      ${top.length ? `<div class="tbl-wrap" style="margin-top:10px"><table class="rt"><thead><tr><th>Reason</th><th class="n">Times</th></tr></thead><tbody>${top.map((e) => `<tr><td>${esc(e.raw)}</td><td class="n">${e.n}</td></tr>`).join('')}</tbody></table></div>` : '<div class="nodata">No reasons recorded for these filters.</div>'}</article>`;
+  };
+
+  /* ---------- Render ---------- */
+  function render() {
+    charts.splice(0).forEach((c) => c.destroy());
+    const s = SECTIONS.find((x) => x.key === section);
+    const title = section === 'overall' ? 'Overall dashboard' : `${s.label} dashboard`;
+    if (loadError) { cap.innerHTML = `<div class="cc"><div class="nodata"><b>Could not load data.</b><br>${esc(friendlyError(loadError))}</div></div>`; return; }
+    if (!s.live) {
+      cap.innerHTML = capHead(title) + `<div class="cc row1 soon" data-cap><div class="ico">${icon(s.icon)}</div><h3>${esc(s.label)} dashboard is coming soon</h3>
+        <p>Charts will appear here once the ${esc(s.label)} page is live and its data is being captured.</p></div>`;
+      return;
+    }
+    const list = filtered(), rows = flat(list), draws = [];
+    const add = (c) => { draws.push(c.draw); return c.html; };
+    const pair = (a, b) => `<div class="row2" data-cap>${a}${b}</div>`;
+    let html = capHead(title);
+    if (!list.length) {
+      html += `<div class="cc row1" data-cap><div class="nodata">${all.length ? 'No checks match these filters.' : 'No inventory checks have been submitted yet. Charts appear after the first check.'}</div></div>`;
+    } else if (section === 'overall') {
+      html += kpiHtml(rows, list);
+      html += pair(add(mk.deptCompliance(rows)), add(mk.monthlyCompliance(rows)));
+      html += `<div class="row1" data-cap><article class="cc"><h3>Modules</h3><p class="sub">Inventory has live data. The other modules will be added here as they go live.</p>
+        <div class="mods">${SECTIONS.filter((x) => x.key !== 'overall').map((x) => `<div class="mod ${x.live ? 'live' : ''}"><b>${esc(x.label)}</b><small>${x.live ? 'Live' : 'Coming soon'}</small></div>`).join('')}</div></article></div>`;
+      html += notOkTable(rows, 'Latest Not OK stations', 'Most recent stations outside min and max');
+    } else {
+      html += kpiHtml(rows, list);
+      html += pair(add(mk.deptCompliance(rows)), add(mk.deptStatus(rows)));
+      html += pair(add(mk.monthlyStatus(rows)), add(mk.monthlyCompliance(rows)));
+      html += `<div class="row1" data-cap>${add(mk.lineStatus(rows))}</div>`;
+      html += pair(add(mk.avgInventory(list)), add(mk.dailyCompliance(rows)));
+      html += `<div class="row1" data-cap>${add(mk.topStations(rows))}</div>`;
+      html += `<div data-cap>${notOkTable(rows, 'Latest Not OK stations', 'Most recent stations outside min and max')}</div><div data-cap>${reasonsTable(rows)}</div>`;
+    }
+    cap.innerHTML = html;
+    cap.querySelectorAll('.tgl').forEach((b) => {
+      b.onclick = () => {
+        const on = b.getAttribute('aria-pressed') !== 'true';
+        b.setAttribute('aria-pressed', on); b.textContent = on ? 'Chart' : 'Table';
+        cap.querySelector('#' + b.dataset.t + 'v').hidden = on; cap.querySelector('#' + b.dataset.t + 't').hidden = !on;
+      };
     });
+    if (draws.length) lib('chart').then(() => draws.forEach((d) => d())).catch((e) => toast(e.message));
+  }
 
-    document.getElementById("logoutBtn").addEventListener("click", async () => {
-      await logoutUser();
-      window.location.href = "index.html";
-    });
-  </script>
+  /* ---------- Download and export (bottom of page) ---------- */
+  const tools = main.querySelector('#tools');
+  tools.innerHTML = `
+    <article class="cc"><h3>Download this dashboard</h3>
+      <p class="sub">Saves the section you are viewing, with the current filters, as a PDF or a picture.</p>
+      <div class="row"><button type="button" class="btn btn-primary" id="dPdf">${icon('upload')}<span>Download PDF</span></button>
+      <button type="button" class="btn btn-ghost" id="dPng"><span>Download image (PNG)</span></button></div><div class="hint" id="dMsg"></div></article>
+    <article class="cc"><h3>Export inventory data</h3>
+      <p class="sub">Excel file with every station check, plus a summary by department and month.</p>
+      <div class="fg"><div><label class="l" for="xm">Month</label><select id="xm"><option value="">All months</option>${monthsAll.map((m) => `<option value="${m}">${monthName(m)}</option>`).join('')}</select></div>
+      <div><label class="l" for="xd">Department</label><select id="xd"><option value="">All departments</option>${deptsAll.map((d) => `<option>${esc(d)}</option>`).join('')}</select></div></div>
+      <div class="row"><button type="button" class="btn btn-primary" id="xGo"><span>Export Excel</span></button></div><div class="hint" id="xMsg"></div></article>`;
+
+  const stamp = () => localKey(new Date());
+  async function snapshot() {
+    const h2c = await lib('h2c');
+    await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 450)));   // let chart animations finish
+    return h2c(cap, { scale: 2, backgroundColor: '#f3f5f7', useCORS: true, logging: false, ignoreElements: (e) => e.classList?.contains('no-cap') });
+  }
+  tools.querySelector('#dPng').onclick = async (ev) => {
+    const b = ev.currentTarget, msg = tools.querySelector('#dMsg'); b.disabled = true; msg.textContent = 'Preparing…';
+    try {
+      const cv = await snapshot(), a = document.createElement('a');
+      a.href = cv.toDataURL('image/png'); a.download = `Dashboard_${section}_${stamp()}.png`; a.click(); msg.textContent = 'Image downloaded.';
+    } catch (e) { msg.textContent = friendlyError(e); }
+    b.disabled = false;
+  };
+  tools.querySelector('#dPdf').onclick = async (ev) => {
+    const b = ev.currentTarget, msg = tools.querySelector('#dMsg'); b.disabled = true; msg.textContent = 'Preparing…';
+    try {
+      const [{ jsPDF }, cv] = [await lib('pdf'), await snapshot()];
+      const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
+      const m = 8, iw = 210 - 2 * m, mm = iw / cv.width, pageH = Math.floor((297 - 2 * m) / mm);
+      const top = cap.getBoundingClientRect().top;
+      // page breaks only between blocks, so a chart is never cut in half
+      const breaks = [...cap.querySelectorAll('[data-cap]')].map((e) => Math.round((e.getBoundingClientRect().bottom - top) * 2)).sort((a, c) => a - c);
+      let y = 0, page = 0;
+      while (y < cv.height) {
+        let end = Math.min(y + pageH, cv.height);
+        if (end < cv.height) { const ok = breaks.filter((x) => x > y + pageH * 0.35 && x <= end); if (ok.length) end = ok[ok.length - 1]; }
+        const part = document.createElement('canvas'); part.width = cv.width; part.height = end - y;
+        part.getContext('2d').drawImage(cv, 0, y, cv.width, end - y, 0, 0, cv.width, end - y);
+        if (page++) pdf.addPage();
+        pdf.addImage(part.toDataURL('image/jpeg', 0.92), 'JPEG', m, m, iw, (end - y) * mm);
+        y = end;
+      }
+      pdf.save(`Dashboard_${section}_${stamp()}.pdf`); msg.textContent = 'PDF downloaded.';
+    } catch (e) { msg.textContent = friendlyError(e); }
+    b.disabled = false;
+  };
+
+  tools.querySelector('#xGo').onclick = async (ev) => {
+    const b = ev.currentTarget, msg = tools.querySelector('#xMsg');
+    const month = tools.querySelector('#xm').value, dept = tools.querySelector('#xd').value;
+    const list = all.filter((c) => (!month || c.month === month) && (!dept || c.department === dept)).sort((a, c) => a.day.localeCompare(c.day) || (a.createdAt?.toMillis?.() || 0) - (c.createdAt?.toMillis?.() || 0));
+    if (!list.length) { msg.textContent = 'There is no data for this month and department.'; return; }
+    b.disabled = true; msg.textContent = 'Preparing…';
+    try {
+      const X = await lib('xlsx');
+      const detail = [['Date', 'Time', 'Department', 'Line', 'Station', 'Min', 'Max', 'Actual', 'Status', 'Reason', 'Submitted by', 'Employee ID', 'Entry type']];
+      list.forEach((c) => {
+        const live = !c.backdated && !c.imported && c.createdAt?.toDate;
+        const time = live ? c.createdAt.toDate().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '';
+        c.items.forEach((i) => detail.push([c.day, time, c.department, c.line, i.stationName, Number(i.min), Number(i.max), Number(i.actual), i.status, i.reason || '', person(c), c.employeeId || '', c.imported ? 'Imported' : c.backdated ? 'Past entry' : 'Submitted']));
+      });
+      const g = new Map();
+      list.forEach((c) => { const k = `${c.department}|${c.month}`; const t = g.get(k) || { dept: c.department, month: c.month, checks: 0, n: 0, ok: 0 }; t.checks++; c.items.forEach((i) => { t.n++; if (i.status === 'OK') t.ok++; }); g.set(k, t); });
+      const sum = [['Department', 'Month', 'Checks', 'Stations checked', 'OK', 'Not OK', 'Compliance %']];
+      [...g.values()].sort((a, c) => a.dept.localeCompare(c.dept) || a.month.localeCompare(c.month)).forEach((t) => sum.push([t.dept, monthName(t.month), t.checks, t.n, t.ok, t.n - t.ok, pct(t.ok, t.n) ?? '']));
+      const wb = X.utils.book_new();
+      const w1 = X.utils.aoa_to_sheet(detail), w2 = X.utils.aoa_to_sheet(sum);
+      w1['!cols'] = [12, 9, 14, 18, 28, 7, 7, 8, 9, 30, 20, 12, 12].map((w) => ({ wch: w }));
+      w2['!cols'] = [16, 12, 9, 17, 8, 8, 14].map((w) => ({ wch: w }));
+      X.utils.book_append_sheet(wb, w1, 'Station checks'); X.utils.book_append_sheet(wb, w2, 'Summary');
+      X.writeFile(wb, `Inventory_Export_${month || 'All-months'}_${(dept || 'All-departments').replace(/\s+/g, '-')}.xlsx`);
+      msg.textContent = `Exported ${detail.length - 1} station checks.`;
+    } catch (e) { msg.textContent = friendlyError(e); }
+    b.disabled = false;
+  };
+
+  syncLines();
+  route();
+</script>
 </body>
 </html>
