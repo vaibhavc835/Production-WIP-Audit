@@ -22,7 +22,7 @@ const [{ initializeApp }, A, F] = await Promise.all([
 const { getAuth, onAuthStateChanged, signOut, createUserWithEmailAndPassword,
         EmailAuthProvider, reauthenticateWithCredential, updatePassword } = A;
 const { getFirestore, initializeFirestore, doc, collection, query, where, getDoc, getDocs, setDoc,
-        updateDoc, deleteDoc, writeBatch, serverTimestamp } = F;
+        updateDoc, deleteDoc, writeBatch, serverTimestamp, runTransaction, Timestamp } = F;
 
 /* ---------- Settings you may want to change ---------- */
 // Same value as in index.html. An employee ID "12345" logs in as 12345@wipaudit.local
@@ -46,7 +46,7 @@ export const NAV = [
   { key: 'dashboard',     label: 'Dashboard',      icon: 'dashboard', href: 'dashboard.html' },
   { key: 'about',         label: 'About',          icon: 'info',     modal: 'about' },
   { key: 'inventory',     label: 'Inventory',      icon: 'box',      href: 'inventory.html' },
-  { key: 'issue',         label: 'Issue Report',   icon: 'alert',    href: null },
+  { key: 'issue',         label: 'Issue Report',   icon: 'alert',    href: 'issues.html' },
   { key: 'improvement',   label: 'Improvement',    icon: 'trend',    href: null },
   { key: 'multiskilling', label: 'Multiskilling',  icon: 'users',    href: null },
   { key: 'shift',         label: 'Shift Schedule', icon: 'calendar', href: null },
@@ -619,7 +619,7 @@ export async function updateUser(uid, data) {
 
 let secondary = null;
 // Creates the login with a second app instance so the admin stays signed in.
-export async function createUser({ employeeId, name, password, role = 'user', departments = [], userNo = null, mustChangePassword = true }) {
+export async function createUser({ employeeId, name, password, role = 'user', departments = [], userNo = null, mustChangePassword = true, level = 1, reportsTo = '' }) {
   if (!secondary) secondary = initializeApp(app.options, 'wip-secondary');
   const a2 = getAuth(secondary);
   const email = idToEmail(employeeId);
@@ -628,7 +628,7 @@ export async function createUser({ employeeId, name, password, role = 'user', de
   try { await signOut(a2); } catch { /* ignore */ }
   const profile = {
     name, employeeId: String(employeeId).trim(), email, role, departments,
-    active: true, mustChangePassword, userNo
+    active: true, mustChangePassword, userNo, level: Number(level) || 1, reportsTo: reportsTo || ''
   };
   await setDoc(doc(db, 'users', uid), { ...profile, createdAt: serverTimestamp(), createdBy: auth.currentUser.uid });
   return { uid, ...profile };
@@ -826,3 +826,211 @@ export async function deleteInventoryChecksBulk(ids, onProgress) {
   }
   return ids.length;
 }
+
+
+/* =====================================================================
+   Issue Report: organisation, masters, routing, workflow
+   ===================================================================== */
+export const ORG_LEVELS = [
+  { n: 1, label: 'Level 1 (Engineer)' }, { n: 2, label: 'Level 2 (Manager)' }, { n: 3, label: 'Level 3 (HOD)' },
+  { n: 4, label: 'Level 4 (GM)' }, { n: 5, label: 'Level 5 (MD)' }
+];
+export const levelLabel = (n) => (ORG_LEVELS.find((l) => l.n === Number(n)) || ORG_LEVELS[0]).label;
+
+// Which step of the issue form asks for which field. "locked" fields cannot be moved to another step.
+export const FIELD_DEFS = [
+  { key: 'area',        label: 'Dept. / Area',                 stage: 'initiator',   required: true,  locked: true },
+  { key: 'line',        label: 'Line',                          stage: 'initiator',   required: true },
+  { key: 'nature',      label: 'Nature of issue',               stage: 'initiator',   required: true },
+  { key: 'station',     label: 'Station name',                  stage: 'initiator',   required: true },
+  { key: 'model',       label: 'Model & MSN-PSN',               stage: 'initiator',   required: false },
+  { key: 'partNumber',  label: 'Part number',                   stage: 'initiator',   required: false },
+  { key: 'description', label: 'Problem description',           stage: 'initiator',   required: true },
+  { key: 'category',    label: 'Issue category',                stage: 'initiator',   required: true,  locked: true },
+  { key: 'respDept',    label: 'Responsibility (department)',   stage: 'initiator',   required: true,  locked: true },
+  { key: 'containment', label: 'Containment action',            stage: 'responsible', required: true,  locked: true },
+  { key: 'mp',          label: 'Total MP',                      stage: 'responsible', required: false },
+  { key: 'mc',          label: 'No. of M-C',                    stage: 'responsible', required: false },
+  { key: 'downtimeH',   label: 'Downtime hours',                stage: 'responsible', required: false },
+  { key: 'approvalNote', label: 'Approver comment',             stage: 'approver',    required: false }
+];
+export const DEFAULT_LEAD = { target: 450, t3: 900, t4: 1440, t5: 2880 };   // minutes from the report time
+export const DEFAULT_ISSUE_SETUP = {
+  areas: ['Fabrication', 'Cutting Shop', 'Paint Shop', 'Assembly', 'Testing', 'PPIC', 'Quality'],
+  natures: ['Abnormal', 'Day to Day'],
+  categories: ['Poor Quality', 'Lack of Parts', 'Facility Breakdown', 'Others', 'BOM/Design Error'],
+  respDepts: ['Assembly', 'SQA', 'Fabrication', 'PPIC', 'MPL', 'Design', 'Quality', 'Gray Zone', 'Sales', 'Maintenance', 'PE', 'PD', 'HR', 'Cutting Shop', 'CKD', 'MHB'],
+  psm: { minRepeats: 5, minLossHours: 0, windowDays: 90 },   // 0 = rule switched off
+  rate: 300                                                  // cost per man-hour lost
+};
+
+export async function getIssueSetup() {
+  let d = {};
+  try { const s = await getDoc(doc(db, 'config', 'issueSetup')); d = s.exists() ? s.data() : {}; } catch { /* use defaults */ }
+  const fields = {};
+  FIELD_DEFS.forEach((f) => {
+    const c = d.fields?.[f.key] || {};
+    fields[f.key] = { label: f.label, locked: !!f.locked, stage: f.locked ? f.stage : (c.stage || f.stage), required: f.locked && f.key !== 'approvalNote' ? true : (c.required ?? f.required) };
+  });
+  const arr = (k) => (Array.isArray(d[k]) && d[k].length ? d[k] : DEFAULT_ISSUE_SETUP[k]);
+  return { areas: arr('areas'), natures: arr('natures'), categories: arr('categories'), respDepts: arr('respDepts'),
+    psm: { ...DEFAULT_ISSUE_SETUP.psm, ...(d.psm || {}) }, rate: Number(d.rate ?? DEFAULT_ISSUE_SETUP.rate), fields };
+}
+export async function saveIssueSetup(patch) {
+  await setDoc(doc(db, 'config', 'issueSetup'), { ...patch, updatedAt: serverTimestamp() }, { merge: true });
+}
+
+// Simple master collections: issueStations, issueResp, issueLead
+export async function listColl(name) {
+  const s = await getDocs(collection(db, name));
+  return s.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+export async function saveColl(name, id, data) {
+  await setDoc(doc(db, name, id), { ...data, updatedAt: serverTimestamp() }, { merge: true });
+}
+export async function deleteColl(name, id) { await deleteDoc(doc(db, name, id)); }
+export async function deleteColls(name, ids, onProgress) {
+  for (let i = 0; i < ids.length; i += 400) {
+    const batch = writeBatch(db);
+    ids.slice(i, i + 400).forEach((id) => batch.delete(doc(db, name, id)));
+    await batch.commit();
+    onProgress?.(Math.min(i + 400, ids.length), ids.length);
+  }
+  return ids.length;
+}
+export async function writeColl(name, items, { replace = false, onProgress } = {}) {
+  const ops = items.map((it) => ({ id: it.id, data: (({ id, ...r }) => r)(it) }));
+  if (replace) {
+    const keep = new Set(items.map((i) => i.id));
+    (await listColl(name)).forEach((r) => { if (!keep.has(r.id)) ops.push({ id: r.id, del: true }); });
+  }
+  for (let i = 0; i < ops.length; i += 400) {
+    const batch = writeBatch(db);
+    ops.slice(i, i + 400).forEach((o) => { const ref = doc(db, name, o.id); if (o.del) batch.delete(ref); else batch.set(ref, { ...o.data, updatedAt: serverTimestamp() }, { merge: true }); });
+    await batch.commit();
+    onProgress?.(Math.min(i + 400, ops.length), ops.length);
+  }
+  return ops.length;
+}
+
+/* ----- organisation chart: each user has a level (1 to 5) and a superior (reportsTo = uid) ----- */
+export function orgChain(users, uid) {
+  const by = new Map(users.map((u) => [u.uid, u])), out = [], seen = new Set([uid]);
+  let cur = by.get(uid);
+  while (cur && cur.reportsTo && by.has(cur.reportsTo) && !seen.has(cur.reportsTo)) { cur = by.get(cur.reportsTo); seen.add(cur.uid); out.push(cur); }
+  return out;                                               // nearest superior first
+}
+export const tierUser = (users, uid, k) => orgChain(users, uid).find((a) => Number(a.level || 1) >= k && a.active !== false) || null;
+
+/* ----- routing: who is responsible, who is above them, how long each step may take ----- */
+const isAny = (c) => !c || c === '*';
+export const pickResp = (resps, dept, cat) =>
+  resps.find((r) => r.department === dept && r.category === cat) || resps.find((r) => r.department === dept && isAny(r.category)) || null;
+export function pickLead(leads, dept, cat) {
+  const r = leads.find((x) => x.department === dept && x.category === cat) || leads.find((x) => x.department === dept && isAny(x.category))
+    || leads.find((x) => isAny(x.department) && x.category === cat) || leads.find((x) => isAny(x.department) && isAny(x.category));
+  return { target: Number(r?.target ?? DEFAULT_LEAD.target), t3: Number(r?.t3 ?? DEFAULT_LEAD.t3), t4: Number(r?.t4 ?? DEFAULT_LEAD.t4), t5: Number(r?.t5 ?? DEFAULT_LEAD.t5), custom: !!r };
+}
+export function buildRoute({ users, resps, leads, respDept, category, initiatorUid }) {
+  const r = pickResp(resps, respDept, category);
+  const uids = (r?.userUids || []).filter((u) => users.some((x) => x.uid === u && x.active !== false));
+  const primary = uids[0] || null;
+  const tiers = { l2: null, l3: null, l4: null, l5: null };
+  if (primary) [2, 3, 4, 5].forEach((k) => { tiers['l' + k] = tierUser(users, primary, k)?.uid || null; });
+  const approver = tierUser(users, initiatorUid, 2);
+  return { responsibleUids: uids, primaryUid: primary, tiers, lead: pickLead(leads, respDept, category), approverUid: approver?.uid || null };
+}
+
+/* ----- dates and ids ----- */
+const MON3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+export const issueMs = (i) => i.reportedAt?.toMillis?.() ?? i.reportedMs ?? 0;
+export const dayKeyOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+export const weekMonthOf = (d) => `${Math.ceil(d.getDate() / 7)}W-${MON3[d.getMonth()]}-${d.getFullYear()}`;
+export const fmtDur = (m) => { m = Math.round(Math.abs(m)); const h = Math.floor(m / 60), r = m % 60; return h ? (r ? `${h} h ${r} m` : `${h} h`) : `${r} m`; };
+export const issueNo = (i) => i.sn ? 'ISS-' + String(i.sn).padStart(4, '0') : (i.importSn ? 'Old-' + i.importSn : '-');
+export const repeatKey = (i) => [i.area, i.line, i.station, i.category].map((x) => String(x || '').trim().toLowerCase()).join('|');
+
+/* ----- who sees an issue, and in which role ----- */
+export function issueRole(issue, uid, now = Date.now()) {
+  const mins = (now - issueMs(issue)) / 60000, L = issue.lead || DEFAULT_LEAD, T = issue.tiers || {};
+  const out = { role: null, level: 0, mins, overdue: issue.status === 'open' && mins > (L.target ?? 450) };
+  if (issue.status === 'open') {
+    if ((issue.responsibleUids || []).includes(uid)) { out.role = 'action'; out.level = 1; }
+    else if (T.l2 === uid) { out.role = 'info'; out.level = 2; }
+    else if (T.l3 === uid && mins >= L.t3) { out.role = 'escalated'; out.level = 3; }
+    else if (T.l4 === uid && mins >= L.t4) { out.role = 'escalated'; out.level = 4; }
+    else if (T.l5 === uid && mins >= L.t5) { out.role = 'escalated'; out.level = 5; }
+  } else if (issue.status === 'pending') {
+    if (issue.approverUid === uid) out.role = 'approve';
+    else if ((issue.responsibleUids || []).includes(uid)) out.role = 'waiting';
+  }
+  if (!out.role && issue.initiatorUid === uid) out.role = 'mine';
+  return out;
+}
+export function currentLevel(issue, now = Date.now()) {
+  const mins = (now - issueMs(issue)) / 60000, L = issue.lead || DEFAULT_LEAD;
+  return mins >= L.t5 ? 5 : mins >= L.t4 ? 4 : mins >= L.t3 ? 3 : 2;
+}
+
+/* ----- issues ----- */
+export async function listIssues(statuses) {
+  const s = await getDocs(statuses ? query(collection(db, 'issues'), where('status', 'in', statuses)) : collection(db, 'issues'));
+  return s.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+export async function listIssuesAtStation(station) {
+  const s = await getDocs(query(collection(db, 'issues'), where('station', '==', station)));
+  return s.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+export async function createIssue(data) {
+  const ref = doc(collection(db, 'issues')), cref = doc(db, 'counters', 'issues');
+  let sn = 0;
+  await runTransaction(db, async (tx) => {
+    const c = await tx.get(cref);
+    sn = (c.exists() ? Number(c.data().n) || 0 : 0) + 1;
+    tx.set(cref, { n: sn });
+    tx.set(ref, { ...data, sn, createdAt: serverTimestamp(), reportedAt: serverTimestamp() });
+  });
+  return { id: ref.id, sn };
+}
+export async function updateIssue(id, data) { await updateDoc(doc(db, 'issues', id), { ...data, updatedAt: serverTimestamp() }); }
+
+export async function submitContainment(issue, actor, vals, rate = 300) {
+  const delayMin = Math.max(0, Math.round((Date.now() - issueMs(issue)) / 60000));
+  const target = issue.lead?.target ?? DEFAULT_LEAD.target;
+  const mp = Number(vals.mp) || 0, mc = Number(vals.mc) || 0, dt = Number(vals.downtimeH) || 0;
+  const hoursTotal = Math.round(mp * (mc > 0 ? mc : 1) * dt * 100) / 100;
+  const data = {
+    status: 'pending', containment: String(vals.containment || '').trim(), containmentBy: { uid: actor.uid, name: actor.name, employeeId: actor.employeeId },
+    escalationLevel: Number(actor.level) || 1, delayMin, leadResult: delayMin >= target ? 'Not Achieved' : 'Achieved',
+    mp, mc, downtimeH: dt, hoursTotal, mhCost: Math.round(hoursTotal * rate), containmentAt: serverTimestamp()
+  };
+  await updateIssue(issue.id, data);
+  return data;
+}
+export async function returnIssue(issue, actor, note) {
+  await updateIssue(issue.id, {
+    status: 'open', returnCount: (issue.returnCount || 0) + 1, returnNote: String(note || '').trim(),
+    prevContainments: [...(issue.prevContainments || []), { text: issue.containment || '', by: issue.containmentBy?.name || '', returnedBy: actor.name }],
+    containment: '', containmentAt: null
+  });
+}
+// Repeat count and loss for one issue's station, used to decide a PSM referral
+export function psmCheck(issue, sameStation, psm, now = Date.now()) {
+  const key = repeatKey(issue), win = (Number(psm.windowDays) || 90) * 86400000;
+  const group = sameStation.filter((x) => repeatKey(x) === key && now - issueMs(x) <= win);
+  if (!group.some((x) => x.id === issue.id)) group.push(issue);
+  const loss = Math.round(group.reduce((a, x) => a + (Number(x.hoursTotal) || 0), 0) * 10) / 10;
+  const byCount = Number(psm.minRepeats) > 0 && group.length >= Number(psm.minRepeats);
+  const byLoss = Number(psm.minLossHours) > 0 && loss >= Number(psm.minLossHours);
+  return { refer: byCount || byLoss, count: group.length, loss, reason: byCount ? `${group.length} repeats in ${psm.windowDays} days` : byLoss ? `${loss} loss hours in ${psm.windowDays} days` : '' };
+}
+export async function approveIssue(issue, actor, note, setup) {
+  const same = await listIssuesAtStation(issue.station);
+  const closed = { ...issue, status: 'closed' };
+  const p = psmCheck(closed, same, setup.psm);
+  const data = { status: 'closed', approvedBy: { uid: actor.uid, name: actor.name }, approvalNote: String(note || '').trim(), approvedAt: serverTimestamp(),
+    psmRefer: p.refer, psmReason: p.reason, ...(p.refer && !issue.psmRefer ? { psmReferredAt: serverTimestamp() } : {}) };
+  await updateIssue(issue.id, data);
+  return { ...data, psm: p };
+}
+export const tsFromDate = (d) => Timestamp.fromDate(d);

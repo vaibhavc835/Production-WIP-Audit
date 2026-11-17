@@ -32,7 +32,8 @@
     listStations, stationId, saveStation, deleteStation, writeStations,
     getAdminMessage, setAdminMessage, DEFAULT_ADMIN_MESSAGE,
     listInventoryChecks, getInventoryCheck, updateInventoryCheck, deleteInventoryCheck,
-    listStationsByDepartment, saveInventoryCheck, deleteInventoryChecksBulk, checkDay
+    listStationsByDepartment, saveInventoryCheck, deleteInventoryChecksBulk, checkDay,
+    ORG_LEVELS, levelLabel
   } from './js/wip-core.js';
 
   const ctx = await startPage({ active: 'admin', adminOnly: true, title: 'Admin Control' });
@@ -77,6 +78,7 @@
       <button type="button" class="tile" data-t="users"><span class="ico">${icon('users')}</span><span><b>User Database</b><small id="cUsers">Loading</small></span></button>
       <button type="button" class="tile" data-t="inventory"><span class="ico">${icon('db')}</span><span><b>Station Database</b><small id="cInv">Loading</small></span></button>
       <button type="button" class="tile" data-t="history"><span class="ico">${icon('clipboard')}</span><span><b>Inventory History</b><small id="cHist">View / Add past checks</small></span></button>
+      <button type="button" class="tile" data-t="issuesetup"><span class="ico">${icon('alert')}</span><span><b>Issue Setup</b><small>Masters, lead time, fields</small></span></button>
       <button type="button" class="tile" data-t="message"><span class="ico">${icon('msg')}</span><span><b>Admin Message</b><small>Shown on Home</small></span></button>
     </div>
     <section id="panel" class="panel"></section>`;
@@ -92,9 +94,9 @@
   main.querySelectorAll('#tabs .tile').forEach((t) => { t.onclick = () => { location.hash = t.dataset.t; }; });
   const route = () => {
     const h = location.hash.replace('#', '');
-    state.tab = ['users', 'inventory', 'history', 'message'].includes(h) ? h : 'users';
+    state.tab = ['users', 'inventory', 'history', 'issuesetup', 'message'].includes(h) ? h : 'users';
     updateTiles();
-    ({ users: renderUsers, inventory: renderInventory, history: renderHistory, message: renderMessage })[state.tab]();
+    ({ users: renderUsers, inventory: renderInventory, history: renderHistory, issuesetup: renderIssueSetupTab, message: renderMessage })[state.tab]();
   };
   window.addEventListener('hashchange', route);
 
@@ -170,7 +172,7 @@
         <button type="button" class="btn btn-primary" id="uAdd">${icon('plus')}<span>Add user</span></button>
       </div>
       <div class="tbl-wrap"><table class="tbl"><thead><tr>
-        <th>No.</th><th>Employee name</th><th>User ID</th><th>Role</th><th>Access department 1</th><th>Access department 2</th><th>Status</th><th></th>
+        <th>No.</th><th>Employee name</th><th>User ID</th><th>Role</th><th>Level</th><th>Reports to</th><th>Access departments</th><th>Status</th><th></th>
       </tr></thead><tbody id="ub"></tbody></table></div>
       <div class="note" id="uNote"></div>`;
     const f = () => drawUsers();
@@ -195,14 +197,15 @@
         <td data-label="Employee name"><b>${esc(u.name)}</b></td>
         <td data-label="User ID">${esc(u.employeeId)}</td>
         <td data-label="Role"><span class="badge ${u.role === 'admin' ? 'admin' : ''}">${u.role === 'admin' ? 'Admin' : 'User'}</span></td>
-        <td data-label="Department 1">${esc(u.departments?.[0] || '')}</td>
-        <td data-label="Department 2">${esc(u.departments?.[1] || '')}</td>
+        <td data-label="Level">${esc(levelLabel(u.level))}</td>
+        <td data-label="Reports to">${esc(state.users.find((z) => z.uid === u.reportsTo)?.name || '-')}</td>
+        <td data-label="Departments">${esc((u.departments || []).join(', '))}</td>
         <td data-label="Status"><span class="badge ${off ? 'off' : ''}">${off ? 'Inactive' : 'Active'}</span></td>
         <td class="acts-td"><div class="acts">
           <button type="button" class="btn btn-ghost btn-sm" data-e="${esc(u.uid)}">${icon('edit')}<span>Edit</span></button>
           ${me ? '' : `<button type="button" class="btn btn-sm ${off ? 'btn-ghost' : 'btn-danger'}" data-t="${esc(u.uid)}">${off ? 'Activate' : 'Deactivate'}</button>`}
         </div></td></tr>`;
-    }).join('') || `<tr><td colspan="8"><div class="empty">${state.users.length ? 'No users match these filters.' : 'No users yet. Add one, or import your Excel file.'}</div></td></tr>`;
+    }).join('') || `<tr><td colspan="9"><div class="empty">${state.users.length ? 'No users match these filters.' : 'No users yet. Add one, or import your Excel file.'}</div></td></tr>`;
     panel.querySelector('#uNote').textContent = `Showing ${list.length} of ${state.users.length} users`;
     tb.querySelectorAll('[data-e]').forEach((b) => { b.onclick = () => userDialog(state.users.find((u) => u.uid === b.dataset.e)); });
     tb.querySelectorAll('[data-t]').forEach((b) => { b.onclick = () => toggleUser(state.users.find((u) => u.uid === b.dataset.t)); });
@@ -224,7 +227,6 @@
 
   function userDialog(u) {
     const edit = !!u, me = edit && u.uid === ctx.uid;
-    const d1 = u?.departments?.[0] || '', d2 = u?.departments?.[1] || '';
     const m = openModal({
       title: edit ? 'Edit user' : 'Add user',
       html: `<form id="uf" class="fg" autocomplete="off">
@@ -232,8 +234,11 @@
         <div><label class="l" for="f_id">User ID (employee ID)</label><input id="f_id" value="${esc(u?.employeeId || '')}" ${edit && u.employeeId ? 'disabled' : ''} inputmode="numeric">${edit && !u.employeeId ? '<div class="hint">This profile has no ID yet. Enter it here.</div>' : ''}</div>
         <div><label class="l" for="f_role">Role</label><select id="f_role" ${me ? 'disabled' : ''}><option value="user" ${u?.role !== 'admin' ? 'selected' : ''}>User</option><option value="admin" ${u?.role === 'admin' ? 'selected' : ''}>Admin</option></select>${me ? '<div class="hint">You cannot change your own role.</div>' : ''}</div>
         ${edit ? '' : `<div class="full"><label class="l" for="f_pw">Starting password</label><div class="row"><input id="f_pw" type="text" autocomplete="off"><button type="button" class="btn btn-ghost" id="f_gen">Generate</button></div><div class="hint">Tell the user this password. They will be asked to change it after signing in.</div></div>`}
-        <div><label class="l" for="f_d1">Access department 1</label><select id="f_d1">${opts(DEPARTMENTS, d1)}</select></div>
-        <div><label class="l" for="f_d2">Access department 2</label><select id="f_d2">${opts(DEPARTMENTS.filter((d) => d !== 'All'), d2, 'None')}</select></div>
+        <div class="full"><label class="l">Access departments (tick one or more)</label>
+          <div class="deptgrid" id="f_deps">${DEPARTMENTS.map((d) => `<label><input type="checkbox" value="${esc(d)}" ${(u?.departments || []).includes(d) || ((u?.departments || []).includes('All') && d === 'All') ? 'checked' : ''}> ${d === 'All' ? 'All departments' : esc(d)}</label>`).join('')}</div>
+          <style>.deptgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px 12px;padding:10px;border:1px solid var(--line);border-radius:10px;max-height:190px;overflow:auto}.deptgrid label{display:flex;gap:6px;align-items:center;font-size:14px}.deptgrid input{width:auto}</style></div>
+        <div><label class="l" for="f_lv">Organization level</label><select id="f_lv">${ORG_LEVELS.map((l) => `<option value="${l.n}" ${Number(u?.level || 1) === l.n ? 'selected' : ''}>${esc(l.label)}</option>`).join('')}</select></div>
+        <div><label class="l" for="f_rt">Reports to</label><select id="f_rt"></select><div class="hint">Used for issue escalation and approval.</div></div>
       </form><div class="err" id="f_err"></div>`,
       actions: [
         { label: 'Cancel', onClick: (x) => x.close() },
@@ -242,11 +247,27 @@
     });
     const $ = (id) => m.el.querySelector('#' + id);
     $('f_gen')?.addEventListener('click', () => { $('f_pw').value = genPw(); });
+    let chosenRt = u?.reportsTo || '';
+    const fillRt = () => {
+      const lv = Number($('f_lv').value) || 1;
+      const cands = state.users.filter((z) => z.uid !== u?.uid && z.active !== false && Number(z.level || 1) > lv)
+        .sort((a, b) => Number(a.level || 1) - Number(b.level || 1) || String(a.name).localeCompare(String(b.name)));
+      if (!cands.some((z) => z.uid === chosenRt)) chosenRt = '';
+      $('f_rt').innerHTML = `<option value="">${lv >= 5 ? 'Nobody (top of the chart)' : 'Not set'}</option>` +
+        cands.map((z) => `<option value="${esc(z.uid)}" ${z.uid === chosenRt ? 'selected' : ''}>${esc(z.name)} (${esc(levelLabel(z.level))})</option>`).join('');
+    };
+    m.el.querySelector('#f_deps').addEventListener('change', (e) => {
+      const boxes = [...m.el.querySelectorAll('#f_deps input')];
+      if (e.target.value === 'All' && e.target.checked) boxes.forEach((b) => { if (b.value !== 'All') b.checked = false; });
+      else if (e.target.checked) boxes.find((b) => b.value === 'All').checked = false;
+    });
+    $('f_lv').onchange = fillRt; $('f_rt').onchange = () => { chosenRt = $('f_rt').value; }; fillRt();
 
     async function save(x, btn) {
       const name = clean($('f_name').value), id = clean($('f_id').value);
-      const role = $('f_role').value, a = $('f_d1').value, b = $('f_d2').value;
-      const departments = a === 'All' ? ['All'] : [...new Set([a, b].filter(Boolean))];
+      const role = $('f_role').value;
+      const picked = [...m.el.querySelectorAll('#f_deps input:checked')].map((c) => c.value);
+      const departments = picked.includes('All') ? ['All'] : picked;
       const err = $('f_err'); err.textContent = '';
       if (!name) { err.textContent = 'Enter the employee name.'; return; }
       const idEditable = !$('f_id').disabled;
@@ -255,14 +276,14 @@
       btn.disabled = true; x.locked = true;
       try {
         if (edit) {
-          const data = { name, departments, ...(me ? {} : { role }), ...(idEditable ? { employeeId: id } : {}) };
+          const data = { name, departments, level: Number($('f_lv').value) || 1, reportsTo: chosenRt, ...(me ? {} : { role }), ...(idEditable ? { employeeId: id } : {}) };
           await updateUser(u.uid, data); Object.assign(u, data);
         } else {
           const password = $('f_pw').value;
           if (password.length < 6) { err.textContent = 'The starting password needs at least 6 characters.'; btn.disabled = false; x.locked = false; return; }
           if (state.users.some((z) => String(z.employeeId) === id)) { err.textContent = 'This user ID is already in the list.'; btn.disabled = false; x.locked = false; return; }
           const nextNo = Math.max(0, ...state.users.map((z) => Number(z.userNo) || 0)) + 1;
-          state.users.push(await createUser({ employeeId: id, name, password, role, departments, userNo: nextNo }));
+          state.users.push(await createUser({ employeeId: id, name, password, role, departments, userNo: nextNo, level: Number($('f_lv').value) || 1, reportsTo: chosenRt }));
         }
         x.locked = false; x.close(); updateTiles(); drawUsers(); toast(edit ? 'Changes saved.' : 'User added.');
       } catch (e) { err.textContent = friendlyError(e); btn.disabled = false; x.locked = false; }
@@ -277,7 +298,8 @@
     const exist = new Set(state.users.map((u) => String(u.employeeId)));
     const rows = parsed.rows.map((r, i) => ({
       userNo: Number(r.userno) || i + 1, name: clean(r.employeename), employeeId: clean(r.userid),
-      password: String(r.userpassword ?? '').trim(), departments: [...new Set([fixDept(r.accessdepartment1), fixDept(r.accessdepartment2)].filter(Boolean))]
+      level: Math.min(5, Math.max(1, Number(String(r.level ?? r.organizationlevel ?? '').match(/[1-5]/)?.[0]) || 1)), reportsToId: clean(r.reportsto ?? r.reportstoid ?? r.superiorid),
+      password: String(r.userpassword ?? '').trim(), departments: [...new Set(Object.keys(r).filter((k) => /^(accessdepartment|departments?)\d*$/.test(k)).flatMap((k) => String(r[k] ?? '').split(/[,;\/]/)).map(fixDept).filter(Boolean))]
     })).filter((r) => r.name || r.employeeId);
     rows.forEach((r) => {
       if (r.departments.includes('All')) r.departments = ['All'];
@@ -309,10 +331,16 @@
         const r = todo[i];
         txt.textContent = `Creating ${i + 1} of ${todo.length}: ${r.name}`;
         try {
-          state.users.push(await createUser({ employeeId: r.employeeId, name: r.name, password: r.password, departments: r.departments, userNo: r.userNo }));
+          state.users.push(await createUser({ employeeId: r.employeeId, name: r.name, password: r.password, departments: r.departments, userNo: r.userNo, level: r.level }));
           ok++;
         } catch (e) { fails.push(`${r.name} (${r.employeeId}): ${friendlyError(e)}`); }
         bar.firstElementChild.style.width = Math.round(((i + 1) / todo.length) * 100) + '%';
+      }
+      // second pass: set "Reports to" once everyone exists (a superior may appear later in the file)
+      for (const r of todo) {
+        if (!r.reportsToId) continue;
+        const me = state.users.find((z) => String(z.employeeId) === r.employeeId), boss = state.users.find((z) => String(z.employeeId) === r.reportsToId);
+        if (me && boss && me.uid !== boss.uid) { try { await updateUser(me.uid, { reportsTo: boss.uid }); me.reportsTo = boss.uid; } catch { /* ignore */ } }
       }
       x.locked = false; x.buttons.cancel.disabled = false; x.buttons.cancel.textContent = 'Close';
       txt.textContent = `Done: ${ok} created, ${fails.length} failed.`;
@@ -1182,6 +1210,16 @@
     X.writeFile(wb, `Inventory_History_${new Date().toISOString().slice(0,10)}.xlsx`);
 
     toast('Export completed.');
+  }
+
+  /* ---------- Issue Setup (separate module, loaded when the tab opens) ---------- */
+  async function renderIssueSetupTab() {
+    panel.innerHTML = '<div class="empty">Loading issue setup…</div>';
+    try {
+      const m = await import('./js/issue-setup.js');
+      if (state.tab !== 'issuesetup') return;
+      await m.renderIssueSetup(panel, ctx);
+    } catch (e) { panel.innerHTML = errorBox(e); }
   }
 
   /* ---------- Admin message ---------- */

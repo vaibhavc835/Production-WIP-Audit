@@ -29,7 +29,8 @@
 <script type="module">
   import {
     startPage, NAV, go, icon, esc, toast, openModal, openProfile,
-    startNetwork, getAdminMessage, DEFAULT_ADMIN_MESSAGE
+    startNetwork, getAdminMessage, DEFAULT_ADMIN_MESSAGE,
+    listIssues, issueRole, issueNo, fmtDur, levelLabel, issueMs
   } from './js/wip-core.js';
 
   const ctx = await startPage({ active: 'home', title: 'Home' });
@@ -57,6 +58,8 @@
       </div>
       <div class="date">${esc(today)}</div>
     </section>
+
+    <section id="issueStrip" hidden></section>
 
     ${ctx.profile.mustChangePassword ? `
     <div class="alert" id="pwBanner">
@@ -98,6 +101,32 @@
         <a href="tel:8956954726">8956954726</a>
       </div>
     </footer>`;
+
+
+  // Issues for you (top of Home): open issues where this user must act, approve, or is informed or escalated
+  (async () => {
+    const box = main.querySelector('#issueStrip');
+    try {
+      const now = Date.now();
+      const rows = (await listIssues(['open', 'pending'])).map((i) => ({ i, r: issueRole(i, ctx.uid, now) }))
+        .filter((x) => ['action', 'approve', 'escalated', 'info'].includes(x.r.role));
+      if (!rows.length) return;
+      const rank = { approve: 0, action: 1, escalated: 2, info: 3 };
+      rows.sort((a, b) => rank[a.r.role] - rank[b.r.role] || issueMs(a.i) - issueMs(b.i));
+      const tag = (x) => ({ action: 'Add containment', approve: 'Approve containment', escalated: 'Escalated to you (' + levelLabel(x.r.level) + ')', info: 'For information' }[x.r.role]);
+      const left = (x) => { if (x.i.status !== 'open') return ''; const m = (x.i.lead?.target ?? 450) - x.r.mins; return m >= 0 ? fmtDur(m) + ' left' : 'Overdue by ' + fmtDur(m); };
+      box.innerHTML = `<style>#issueStrip{margin-top:16px;background:#fff;border:1px solid #fecaca;border-left:5px solid #dc2626;border-radius:12px;padding:12px 14px}
+        #issueStrip h2{font-size:15px;margin:0 0 8px;display:flex;justify-content:space-between;gap:8px;align-items:center}
+        #issueStrip a.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:7px 0;border-top:1px solid #f1f5f9;color:inherit;text-decoration:none;font-size:13.5px}
+        #issueStrip .p{padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600;background:#dbeafe;color:#1e40af}
+        #issueStrip .p.l{background:#fee2e2;color:#991b1b}#issueStrip .p.a{background:#fef3c7;color:#92400e}#issueStrip .p.e{background:#ede9fe;color:#5b21b6}</style>
+        <h2><span>Issues for you (${rows.length})</span><a href="issues.html" style="font-size:13px">Open Issue Report</a></h2>
+        ${rows.slice(0, 6).map((x) => { const t = left(x); return `<a class="row" href="issues.html"><b>${esc(issueNo(x.i))}</b><span>${esc(x.i.station || '')} · ${esc(x.i.line || '')}</span><span style="flex:1;min-width:120px;color:#52514e">${esc((x.i.description || '').slice(0, 70))}</span>
+          <span class="p ${x.r.role === 'approve' ? 'a' : x.r.role === 'escalated' ? 'e' : ''}">${esc(tag(x))}</span>${t ? `<span class="p ${t.startsWith('Overdue') ? 'l' : ''}">${esc(t)}</span>` : ''}</a>`; }).join('')}
+        ${rows.length > 6 ? `<div style="font-size:12.5px;color:#64748b;padding-top:6px">and ${rows.length - 6} more</div>` : ''}`;
+      box.hidden = false;
+    } catch { /* the strip is optional: Home works without it */ }
+  })();
 
   startNetwork(main.querySelector('.band canvas'));
 
