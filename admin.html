@@ -48,6 +48,17 @@
   const pad2 = (n) => String(n).padStart(2, '0');
   const localKey = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
   // The date of the check itself (not the day it was uploaded)
+  // Shifts: 1 = 06:30-15:00, 2 = 15:01-23:30, 3 = 23:31-06:29 (the night shift belongs to the day it started).
+  // Checks without a recorded time (imported or past entries) are placed in shift 1.
+  const shiftOf = (c) => {
+    const d = !c.backdated && !c.imported && c.createdAt?.toDate ? c.createdAt.toDate() : null;
+    if (!d) return { day: checkKey(c), shift: 1 };
+    const m = d.getHours() * 60 + d.getMinutes();
+    if (m >= 390 && m <= 900) return { day: localKey(d), shift: 1 };
+    if (m > 900 && m <= 1410) return { day: localKey(d), shift: 2 };
+    if (m > 1410) return { day: localKey(d), shift: 3 };
+    const p = new Date(d); p.setDate(p.getDate() - 1); return { day: localKey(p), shift: 3 };
+  };
   const checkKey = (c) => c.dateKey || (c.createdAt?.toDate ? localKey(c.createdAt.toDate()) : '');
   const fmtDay = (key) => key ? new Date(key + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '-';
   // Reads an Excel date: real date cell, Excel serial number, 2026-11-05, 05-11-2026 (day first), or 5 Nov 2026
@@ -928,13 +939,14 @@
       const iS = keys.findIndex((k) => k === 'station' || k === 'stationname');
       if (iD < 0 || iL < 0 || iS < 0) continue;
       const iR = keys.findIndex((k) => k === 'uniquereasons' || k === 'reason' || k === 'reasons');
-      const dateCols = head.map((h, i) => (i !== iD && i !== iL && i !== iS && parseExcelDate(h) ? i : -1)).filter((i) => i >= 0);
+      const stripShift = (h) => (typeof h === 'string' ? h.replace(/\s*[-|]?\s*shift\s*[123]\b.*$/i, '').trim() : h);
+      const dateCols = head.map((h, i) => (i !== iD && i !== iL && i !== iS && parseExcelDate(stripShift(h)) ? i : -1)).filter((i) => i >= 0);
       if (!dateCols.length) continue;
       const rows = [];
       grid.slice(1).forEach((r, n) => {
         dateCols.forEach((i) => {
           if (String(r[i] ?? '').trim() === '') return;     // no check on that date for this station
-          rows.push({ date: head[i], department: r[iD], line: r[iL], stationname: r[iS], actual: r[i], reason: iR >= 0 ? r[iR] : '', _row: n + 2 });
+          rows.push({ date: stripShift(head[i]), department: r[iD], line: r[iL], stationname: r[iS], actual: r[i], reason: iR >= 0 ? r[iR] : '', _row: n + 2 });
         });
       });
       return { sheet: name, rows };
@@ -985,6 +997,8 @@
 
       const key = `${date}|${dept}|${line}`;
       if (!groups[key]) groups[key] = { date, department: dept, line, items: [] };
+      const prev = groups[key].items.findIndex(x => x.stationName === stationName);
+      if (prev >= 0) groups[key].items.splice(prev, 1);   // several shift columns for one date: the later shift wins
       groups[key].items.push({ stationName, actual, reason });
     });
 
@@ -1168,18 +1182,20 @@
       return;
     }
 
-    // Collect all unique dates
+    // Oldest first, so when a station is checked twice in one shift the later entry is shown
+    list.sort((a, b) => (a.createdAt?.toMillis?.() || 0) - (b.createdAt?.toMillis?.() || 0));
+    // Columns: every date has three shift columns
     const dateSet = new Set();
-    list.forEach(c => {
-      if (checkKey(c)) dateSet.add(checkKey(c));
-    });
+    list.forEach(c => { const k = shiftOf(c).day; if (k) dateSet.add(k); });
     const dates = [...dateSet].sort();
+    const cols = dates.flatMap(d => [1, 2, 3].map(n => `${d}|${n}`));
 
     // Build station map: key = department|line|stationName
     const stationMap = {};
 
     list.forEach(c => {
-      const dateKey = checkKey(c);
+      const sh = shiftOf(c);
+      const dateKey = sh.day ? `${sh.day}|${sh.shift}` : '';
       if (!dateKey) return;
 
       (c.items || []).forEach(item => {
@@ -1208,8 +1224,9 @@
     });
 
     // Build Excel data
-    const header = ['Department', 'Line', 'Station', 'Min', 'Max', ...dates.map(d => {
-      return new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' });
+    const header = ['Department', 'Line', 'Station', 'Min', 'Max', ...cols.map(k => {
+      const [d, n] = k.split('|');
+      return new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) + ' Shift ' + n;
     }), 'Compliance %', 'Unique Reasons', 'Submitted by'];
 
     const rows = Object.values(stationMap).map(s => {
@@ -1220,7 +1237,7 @@
         s.station,
         s.min,
         s.max,
-        ...dates.map(d => s.dates[d] ?? ''),
+        ...cols.map(k => s.dates[k] ?? ''),
         compliance,
         [...s.reasons].join(', '),
         [...s.by].join(', ')
@@ -1235,11 +1252,11 @@
     const wb = X.utils.book_new();
     X.utils.book_append_sheet(wb, ws, 'Inventory History');
     // Second sheet: one row per station per check, with who submitted it and when
-    const det = [['Date', 'Time', 'Department', 'Line', 'Station', 'Min', 'Max', 'Actual', 'Status', 'Reason', 'Submitted by', 'Employee ID', 'Entry type']];
-    list.slice().sort((a, b) => String(checkKey(a)).localeCompare(String(checkKey(b))) || (a.createdAt?.toMillis?.() || 0) - (b.createdAt?.toMillis?.() || 0)).forEach(c => {
+    const det = [['Date', 'Shift', 'Time', 'Department', 'Line', 'Station', 'Min', 'Max', 'Actual', 'Status', 'Reason', 'Submitted by', 'Employee ID', 'Entry type']];
+    list.slice().sort((a, b) => String(shiftOf(a).day).localeCompare(String(shiftOf(b).day)) || shiftOf(a).shift - shiftOf(b).shift || (a.createdAt?.toMillis?.() || 0) - (b.createdAt?.toMillis?.() || 0)).forEach(c => {
       const live = !c.backdated && !c.imported && c.createdAt?.toDate;
       const time = live ? c.createdAt.toDate().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '';
-      (c.items || []).forEach(i => det.push([checkKey(c), time, c.department, c.line, i.stationName, Number(i.min), Number(i.max), Number(i.actual), i.status, i.reason || '',
+      (c.items || []).forEach(i => det.push([shiftOf(c).day, 'Shift ' + shiftOf(c).shift, time, c.department, c.line, i.stationName, Number(i.min), Number(i.max), Number(i.actual), i.status, i.reason || '',
         String(c.name || '').replace(/\s*\(Import\)\s*$/, ''), c.employeeId || '', c.imported ? 'Imported' : c.backdated ? 'Past entry' : 'Submitted']));
     });
     X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(det), 'Check details');

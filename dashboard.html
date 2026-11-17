@@ -564,11 +564,12 @@
     b.disabled = true; msg.textContent = 'Preparing…';
     try {
       const X = await lib('xlsx');
-      const detail = [['Date', 'Time', 'Department', 'Line', 'Station', 'Min', 'Max', 'Actual', 'Status', 'Reason', 'Submitted by', 'Employee ID', 'Entry type']];
+      const detail = [['Date', 'Shift', 'Time', 'Department', 'Line', 'Station', 'Min', 'Max', 'Actual', 'Status', 'Reason', 'Submitted by', 'Employee ID', 'Entry type']];
       list.forEach((c) => {
         const live = !c.backdated && !c.imported && c.createdAt?.toDate;
         const time = live ? c.createdAt.toDate().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '';
-        c.items.forEach((i) => detail.push([c.day, time, c.department, c.line, i.stationName, Number(i.min), Number(i.max), Number(i.actual), i.status, i.reason || '', person(c), c.employeeId || '', c.imported ? 'Imported' : c.backdated ? 'Past entry' : 'Submitted']));
+        const mm = live ? (() => { const t = c.createdAt.toDate(); return t.getHours() * 60 + t.getMinutes(); })() : 600, sh = mm >= 390 && mm <= 900 ? 1 : mm > 900 && mm <= 1410 ? 2 : 3;
+        c.items.forEach((i) => detail.push([c.day, 'Shift ' + sh, time, c.department, c.line, i.stationName, Number(i.min), Number(i.max), Number(i.actual), i.status, i.reason || '', person(c), c.employeeId || '', c.imported ? 'Imported' : c.backdated ? 'Past entry' : 'Submitted']));
       });
       const g = new Map();
       list.forEach((c) => { const k = `${c.department}|${c.month}`; const t = g.get(k) || { dept: c.department, month: c.month, checks: 0, n: 0, ok: 0 }; t.checks++; c.items.forEach((i) => { t.n++; if (i.status === 'OK') t.ok++; }); g.set(k, t); });
@@ -576,7 +577,7 @@
       [...g.values()].sort((a, c) => a.dept.localeCompare(c.dept) || a.month.localeCompare(c.month)).forEach((t) => sum.push([t.dept, monthName(t.month), t.checks, t.n, t.ok, t.n - t.ok, pct(t.ok, t.n) ?? '']));
       const wb = X.utils.book_new();
       const w1 = X.utils.aoa_to_sheet(detail), w2 = X.utils.aoa_to_sheet(sum);
-      w1['!cols'] = [12, 9, 14, 18, 28, 7, 7, 8, 9, 30, 20, 12, 12].map((w) => ({ wch: w }));
+      w1['!cols'] = [12, 9, 9, 14, 18, 28, 7, 7, 8, 9, 30, 20, 12, 12].map((w) => ({ wch: w }));
       w2['!cols'] = [16, 12, 9, 17, 8, 8, 14].map((w) => ({ wch: w }));
       X.utils.book_append_sheet(wb, w1, 'Station checks'); X.utils.book_append_sheet(wb, w2, 'Summary');
       X.writeFile(wb, `Inventory_Export_${month || 'All-months'}_${(dept || 'All-departments').replace(/\s+/g, '-')}.xlsx`);
