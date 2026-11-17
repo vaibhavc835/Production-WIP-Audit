@@ -1188,7 +1188,9 @@
     const dateSet = new Set();
     list.forEach(c => { const k = shiftOf(c).day; if (k) dateSet.add(k); });
     const dates = [...dateSet].sort();
-    const cols = dates.flatMap(d => [1, 2, 3].map(n => `${d}|${n}`));
+    // Only shift columns that have at least one entry
+    const used = new Set(list.map(c => { const sh = shiftOf(c); return sh.day ? `${sh.day}|${sh.shift}` : ''; }));
+    const cols = dates.flatMap(d => [1, 2, 3].map(n => `${d}|${n}`)).filter(k => used.has(k));
 
     // Build station map: key = department|line|stationName
     const stationMap = {};

@@ -571,15 +571,42 @@
         const mm = live ? (() => { const t = c.createdAt.toDate(); return t.getHours() * 60 + t.getMinutes(); })() : 600, sh = mm >= 390 && mm <= 900 ? 1 : mm > 900 && mm <= 1410 ? 2 : 3;
         c.items.forEach((i) => detail.push([c.day, 'Shift ' + sh, time, c.department, c.line, i.stationName, Number(i.min), Number(i.max), Number(i.actual), i.status, i.reason || '', person(c), c.employeeId || '', c.imported ? 'Imported' : c.backdated ? 'Past entry' : 'Submitted']));
       });
+      // Main sheet: one row per station, one column per shift that has entries (same layout as Admin Control export)
+      const shiftOf = (c) => {
+        const t = !c.backdated && !c.imported && c.createdAt?.toDate ? c.createdAt.toDate() : null;
+        if (!t) return { day: c.day, shift: 1 };
+        const m = t.getHours() * 60 + t.getMinutes();
+        if (m >= 390 && m <= 900) return { day: localKey(t), shift: 1 };
+        if (m > 900 && m <= 1410) return { day: localKey(t), shift: 2 };
+        if (m > 1410) return { day: localKey(t), shift: 3 };
+        const p = new Date(t); p.setDate(p.getDate() - 1); return { day: localKey(p), shift: 3 };
+      };
+      const stn = new Map(), used = new Set();
+      list.forEach((c) => {
+        const sh = shiftOf(c), col = `${sh.day}|${sh.shift}`; used.add(col);
+        c.items.forEach((i) => {
+          const k = `${c.department}|${c.line}|${i.stationName}`;
+          const s = stn.get(k) || { department: c.department, line: c.line, station: i.stationName, min: i.min, max: i.max, vals: {}, n: 0, ok: 0, reasons: new Set(), by: new Set() };
+          s.min = i.min; s.max = i.max; s.vals[col] = Number(i.actual); s.n++; if (i.status === 'OK') s.ok++;
+          if (i.reason) s.reasons.add(i.reason); if (person(c)) s.by.add(person(c)); stn.set(k, s);
+        });
+      });
+      const cols = [...used].sort();
+      const colName = (k) => { const [dd, n] = k.split('|'); return new Date(dd + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) + ' Shift ' + n; };
+      const pivot = [['Department', 'Line', 'Station', 'Min', 'Max', ...cols.map(colName), 'Compliance %', 'Unique Reasons', 'Submitted by']];
+      [...stn.values()].sort((p, q) => p.department.localeCompare(q.department) || p.line.localeCompare(q.line) || p.station.localeCompare(q.station)).forEach((s) => {
+        pivot.push([s.department, s.line, s.station, Number(s.min), Number(s.max), ...cols.map((k) => s.vals[k] ?? ''), pct(s.ok, s.n) ?? '', [...s.reasons].join(', '), [...s.by].join(', ')]);
+      });
       const g = new Map();
       list.forEach((c) => { const k = `${c.department}|${c.month}`; const t = g.get(k) || { dept: c.department, month: c.month, checks: 0, n: 0, ok: 0 }; t.checks++; c.items.forEach((i) => { t.n++; if (i.status === 'OK') t.ok++; }); g.set(k, t); });
       const sum = [['Department', 'Month', 'Checks', 'Stations checked', 'OK', 'Not OK', 'Compliance %']];
       [...g.values()].sort((a, c) => a.dept.localeCompare(c.dept) || a.month.localeCompare(c.month)).forEach((t) => sum.push([t.dept, monthName(t.month), t.checks, t.n, t.ok, t.n - t.ok, pct(t.ok, t.n) ?? '']));
       const wb = X.utils.book_new();
-      const w1 = X.utils.aoa_to_sheet(detail), w2 = X.utils.aoa_to_sheet(sum);
+      const w0 = X.utils.aoa_to_sheet(pivot), w1 = X.utils.aoa_to_sheet(detail), w2 = X.utils.aoa_to_sheet(sum);
+      w0['!cols'] = [14, 18, 28, 6, 6, ...cols.map(() => 15), 13, 30, 24].map((w) => ({ wch: w }));
       w1['!cols'] = [12, 9, 9, 14, 18, 28, 7, 7, 8, 9, 30, 20, 12, 12].map((w) => ({ wch: w }));
       w2['!cols'] = [16, 12, 9, 17, 8, 8, 14].map((w) => ({ wch: w }));
-      X.utils.book_append_sheet(wb, w1, 'Station checks'); X.utils.book_append_sheet(wb, w2, 'Summary');
+      X.utils.book_append_sheet(wb, w0, 'Inventory'); X.utils.book_append_sheet(wb, w1, 'Check details'); X.utils.book_append_sheet(wb, w2, 'Summary');
       X.writeFile(wb, `Inventory_Export_${month || 'All-months'}_${(dept || 'All-departments').replace(/\s+/g, '-')}.xlsx`);
       msg.textContent = `Exported ${detail.length - 1} station checks.`;
     } catch (e) { msg.textContent = friendlyError(e); }
