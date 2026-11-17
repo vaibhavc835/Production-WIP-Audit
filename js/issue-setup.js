@@ -71,7 +71,7 @@ export async function renderIssueSetup(panel, ctx) {
   };
   try { await reload(); } catch (e) { panel.innerHTML = `<div class="empty"><b>Could not load data.</b><p>${esc(friendlyError(e))}</p></div>`; return; }
 
-  const TABS = [['org', 'Organization'], ['lists', 'Lists'], ['stations', 'Stations'], ['resp', 'Responsibility'], ['lead', 'Lead time'], ['fields', 'Form fields'], ['psm', 'PSM and cost'], ['import', 'Past data']];
+  const TABS = [['org', 'Organization'], ['lists', 'Lists'], ['stations', 'Stations'], ['resp', 'Responsibility'], ['lead', 'Lead time'], ['fields', 'Form fields'], ['psm', 'PSM, cost, approval'], ['import', 'Past data']];
   let tab = sessionStorage.getItem('isxTab') || 'org';
   panel.innerHTML = `<div class="isx"><div class="sub" id="isSub">${TABS.map(([k, l]) => `<button type="button" data-k="${k}">${l}</button>`).join('')}</div><div id="isBody"></div></div>`;
   const body = panel.querySelector('#isBody');
@@ -338,8 +338,8 @@ export async function renderIssueSetup(panel, ctx) {
     body.innerHTML = `<div class="pad"><p class="help">Choose who fills each field and whether it is required. Fields marked fixed are needed for the issue to reach the right people and cannot be moved.</p>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Field</th><th>Asked from</th><th>Required</th></tr></thead><tbody>
       ${FIELD_DEFS.map((f) => `<tr><td data-label="Field"><b>${esc(f.label)}</b>${f.locked ? ' <span class="path">(fixed)</span>' : ''}</td>
-        <td data-label="Asked from"><select data-s="${f.key}" ${f.locked ? 'disabled' : ''}>${STG.filter(([k]) => k !== 'off' || !f.locked).map(([k, l]) => `<option value="${k}" ${F[f.key].stage === k ? 'selected' : ''}>${l}</option>`).join('')}</select></td>
-        <td data-label="Required"><label><input type="checkbox" data-r="${f.key}" ${F[f.key].required ? 'checked' : ''} ${f.locked && f.key !== 'approvalNote' ? 'disabled' : ''} style="width:auto"> Required</label></td></tr>`).join('')}
+        <td data-label="Asked from">${f.stage === 'auto' ? 'Automatic: report time to containment time' : ''}<select data-s="${f.key}" ${f.locked ? 'disabled' : ''} ${f.stage === 'auto' ? 'hidden' : ''}>${STG.filter(([k]) => k !== 'off' || !f.locked).map(([k, l]) => `<option value="${k}" ${F[f.key].stage === k ? 'selected' : ''}>${l}</option>`).join('')}</select></td>
+        <td data-label="Required"><label><input type="checkbox" data-r="${f.key}" ${F[f.key].required ? 'checked' : ''} ${(f.locked && f.key !== 'approvalNote') || f.stage === 'auto' ? 'disabled' : ''} style="width:auto"> Required</label></td></tr>`).join('')}
       </tbody></table></div>
       <div class="row" style="margin-top:14px;justify-content:flex-end"><button type="button" class="btn btn-primary" id="fSave">Save form fields</button></div></div>`;
     body.querySelector('#fSave').onclick = async (ev) => {
@@ -359,13 +359,19 @@ export async function renderIssueSetup(panel, ctx) {
       <div><label class="l" for="p_l">Or after this many loss hours</label><input id="p_l" type="number" min="0" step="0.5" value="${esc(p.minLossHours)}"></div>
       <div><label class="l" for="p_w">Look back, days</label><input id="p_w" type="number" min="1" step="1" value="${esc(p.windowDays)}"></div>
       <div><label class="l" for="p_r">Cost per man-hour lost</label><input id="p_r" type="number" min="0" step="1" value="${esc(D.setup.rate)}"></div></div>
+      <h3 style="margin:22px 0 6px;font-size:15px">Approval escalation</h3>
+      <p class="help">When a containment action is added, the initiator approves and closes the issue. The initiator's manager may also sign off. Downtime is counted automatically from the issue report time to the containment time. If it is above the hours below, the initiator's HOD (Level 3) or GM (Level 4) also gets the issue to sign off. Their sign-off is optional.</p>
+      <div class="numgrid"><div><label class="l" for="p_hod">HOD may approve above (hours)</label><input id="p_hod" type="number" min="0" step="0.5" value="${esc(D.setup.approval.hodHours)}"></div>
+      <div><label class="l" for="p_gm">GM may approve above (hours)</label><input id="p_gm" type="number" min="0" step="0.5" value="${esc(D.setup.approval.gmHours)}"></div></div>
       <div class="row" style="margin-top:14px;justify-content:flex-end"><button type="button" class="btn btn-primary" id="pSave">Save</button></div></div>`;
     body.querySelector('#pSave').onclick = async (ev) => {
       const b = ev.currentTarget, v = (id) => Number(body.querySelector('#' + id).value);
       const psm = { minRepeats: v('p_n'), minLossHours: v('p_l'), windowDays: v('p_w') || 90 };
       if ([psm.minRepeats, psm.minLossHours, v('p_r')].some((n) => !Number.isFinite(n) || n < 0)) { toast('Enter numbers, zero or more.'); return; }
+      const approval = { hodHours: v('p_hod'), gmHours: v('p_gm') };
+      if (!(approval.hodHours > 0 && approval.gmHours >= approval.hodHours)) { toast('Approval hours: HOD must be above 0, and GM must not be lower than HOD.'); return; }
       b.disabled = true;
-      try { await saveIssueSetup({ psm, rate: v('p_r') }); D.setup.psm = psm; D.setup.rate = v('p_r'); toast('Saved.'); } catch (e) { fail(e); }
+      try { await saveIssueSetup({ psm, rate: v('p_r'), approval }); D.setup.psm = psm; D.setup.rate = v('p_r'); D.setup.approval = approval; toast('Saved.'); } catch (e) { fail(e); }
       b.disabled = false;
     };
   }
@@ -482,7 +488,7 @@ export async function renderIssueSetup(panel, ctx) {
         area, line, nature, station, model: clean(at(row, 'modelmsnpsn')), partNumber: clean(at(row, 'partnumber')), description, category, respDept,
         initiatorUid: iu?.uid || '', reportedByName: iu?.name || repBy, initiatorEmployeeId: iu?.employeeId || '',
         responsibleUids: ru ? [ru.uid] : route.responsibleUids, primaryUid: ru?.uid || route.primaryUid, responsibleName: ru?.name || respBy,
-        tiers: route.tiers, lead: { target: lead.target, t3: lead.t3, t4: lead.t4, t5: lead.t5 }, approverUid: route.approverUid,
+        tiers: route.tiers, lead: { target: lead.target, t3: lead.t3, t4: lead.t4, t5: lead.t5 }, approverUid: route.approverUid, optTiers: route.optTiers,
         status, reportedAt: tsFromDate(when), reportedMs: when.getTime(), dateKey: dayKeyOf(when), weekMonth: weekMonthOf(when),
         repeat: /^rep/i.test(clean(at(row, 'repeatation'))) ? 'Repeated' : 'New',
         containment: clean(at(row, 'containmentaction')), ...(contAt ? { containmentAt: tsFromDate(contAt) } : {}),

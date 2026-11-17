@@ -851,7 +851,7 @@ export const FIELD_DEFS = [
   { key: 'containment', label: 'Containment action',            stage: 'responsible', required: true,  locked: true },
   { key: 'mp',          label: 'Total MP',                      stage: 'responsible', required: false },
   { key: 'mc',          label: 'No. of M-C',                    stage: 'responsible', required: false },
-  { key: 'downtimeH',   label: 'Downtime hours',                stage: 'responsible', required: false },
+  { key: 'downtimeH',   label: 'Downtime hours (automatic)',    stage: 'auto',        required: false, locked: true },
   { key: 'approvalNote', label: 'Approver comment',             stage: 'approver',    required: false }
 ];
 export const DEFAULT_LEAD = { target: 450, t3: 900, t4: 1440, t5: 2880 };   // minutes from the report time
@@ -861,6 +861,7 @@ export const DEFAULT_ISSUE_SETUP = {
   categories: ['Poor Quality', 'Lack of Parts', 'Facility Breakdown', 'Others', 'BOM/Design Error'],
   respDepts: ['Assembly', 'SQA', 'Fabrication', 'PPIC', 'MPL', 'Design', 'Quality', 'Gray Zone', 'Sales', 'Maintenance', 'PE', 'PD', 'HR', 'Cutting Shop', 'CKD', 'MHB'],
   psm: { minRepeats: 5, minLossHours: 0, windowDays: 90 },   // 0 = rule switched off
+  approval: { hodHours: 2, gmHours: 4 },                      // downtime above this: HOD / GM may also approve (optional)
   rate: 300                                                  // cost per man-hour lost
 };
 
@@ -870,11 +871,11 @@ export async function getIssueSetup() {
   const fields = {};
   FIELD_DEFS.forEach((f) => {
     const c = d.fields?.[f.key] || {};
-    fields[f.key] = { label: f.label, locked: !!f.locked, stage: f.locked ? f.stage : (c.stage || f.stage), required: f.locked && f.key !== 'approvalNote' ? true : (c.required ?? f.required) };
+    fields[f.key] = { label: f.label, locked: !!f.locked, stage: f.locked ? f.stage : (c.stage || f.stage), required: f.locked && f.key !== 'approvalNote' && f.stage !== 'auto' ? true : (c.required ?? f.required) };
   });
   const arr = (k) => (Array.isArray(d[k]) && d[k].length ? d[k] : DEFAULT_ISSUE_SETUP[k]);
   return { areas: arr('areas'), natures: arr('natures'), categories: arr('categories'), respDepts: arr('respDepts'),
-    psm: { ...DEFAULT_ISSUE_SETUP.psm, ...(d.psm || {}) }, rate: Number(d.rate ?? DEFAULT_ISSUE_SETUP.rate), fields };
+    psm: { ...DEFAULT_ISSUE_SETUP.psm, ...(d.psm || {}) }, approval: { ...DEFAULT_ISSUE_SETUP.approval, ...(d.approval || {}) }, rate: Number(d.rate ?? DEFAULT_ISSUE_SETUP.rate), fields };
 }
 export async function saveIssueSetup(patch) {
   await setDoc(doc(db, 'config', 'issueSetup'), { ...patch, updatedAt: serverTimestamp() }, { merge: true });
@@ -937,8 +938,10 @@ export function buildRoute({ users, resps, leads, respDept, category, initiatorU
   const primary = uids[0] || null;
   const tiers = { l2: null, l3: null, l4: null, l5: null };
   if (primary) [2, 3, 4, 5].forEach((k) => { tiers['l' + k] = tierUser(users, primary, k)?.uid || null; });
-  const approver = tierUser(users, initiatorUid, 2);
-  return { responsibleUids: uids, primaryUid: primary, tiers, lead: pickLead(leads, respDept, category), approverUid: approver?.uid || null };
+  // The initiator approves (mandatory). Their manager, HOD and GM may also approve, but it is not required.
+  const optTiers = { l2: null, l3: null, l4: null };
+  if (initiatorUid) [2, 3, 4].forEach((k) => { optTiers['l' + k] = tierUser(users, initiatorUid, k)?.uid || null; });
+  return { responsibleUids: uids, primaryUid: primary, tiers, lead: pickLead(leads, respDept, category), approverUid: initiatorUid || null, optTiers };
 }
 
 /* ----- dates and ids ----- */
@@ -962,6 +965,7 @@ export function issueRole(issue, uid, now = Date.now()) {
     else if (T.l5 === uid && mins >= L.t5) { out.role = 'escalated'; out.level = 5; }
   } else if (issue.status === 'pending') {
     if (issue.approverUid === uid) out.role = 'approve';
+    else if ((issue.optApprovalUids || []).includes(uid)) out.role = (issue.signoffs || []).some((x) => x.uid === uid) ? 'signed' : 'cosign';
     else if ((issue.responsibleUids || []).includes(uid)) out.role = 'waiting';
   }
   if (!out.role && issue.initiatorUid === uid) out.role = 'mine';
@@ -994,15 +998,23 @@ export async function createIssue(data) {
 }
 export async function updateIssue(id, data) { await updateDoc(doc(db, 'issues', id), { ...data, updatedAt: serverTimestamp() }); }
 
-export async function submitContainment(issue, actor, vals, rate = 300) {
+export async function submitContainment(issue, actor, vals, setup = {}) {
+  const rate = typeof setup === 'number' ? setup : Number(setup.rate ?? 300);
+  const ap = { ...DEFAULT_ISSUE_SETUP.approval, ...(setup.approval || {}) };
   const delayMin = Math.max(0, Math.round((Date.now() - issueMs(issue)) / 60000));
   const target = issue.lead?.target ?? DEFAULT_LEAD.target;
-  const mp = Number(vals.mp) || 0, mc = Number(vals.mc) || 0, dt = Number(vals.downtimeH) || 0;
+  // Downtime is the time from the issue report to the containment action
+  const mp = Number(vals.mp) || 0, mc = Number(vals.mc) || 0, dt = Math.round((delayMin / 60) * 100) / 100;
+  const O = issue.optTiers || {};
+  const opt = [O.l2, dt > Number(ap.hodHours) ? O.l3 : null, dt > Number(ap.gmHours) ? O.l4 : null]
+    .filter((u) => u && u !== issue.initiatorUid && u !== actor.uid);
   const hoursTotal = Math.round(mp * (mc > 0 ? mc : 1) * dt * 100) / 100;
   const data = {
     status: 'pending', containment: String(vals.containment || '').trim(), containmentBy: { uid: actor.uid, name: actor.name, employeeId: actor.employeeId },
     escalationLevel: Number(actor.level) || 1, delayMin, leadResult: delayMin >= target ? 'Not Achieved' : 'Achieved',
-    mp, mc, downtimeH: dt, hoursTotal, mhCost: Math.round(hoursTotal * rate), containmentAt: serverTimestamp()
+    mp, mc, downtimeH: dt, hoursTotal, mhCost: Math.round(hoursTotal * rate), containmentAt: serverTimestamp(),
+    optApprovalUids: [...new Set(opt)], signoffs: [],
+    approvalLevels: { hod: dt > Number(ap.hodHours), gm: dt > Number(ap.gmHours) }
   };
   await updateIssue(issue.id, data);
   return data;
@@ -1011,7 +1023,7 @@ export async function returnIssue(issue, actor, note) {
   await updateIssue(issue.id, {
     status: 'open', returnCount: (issue.returnCount || 0) + 1, returnNote: String(note || '').trim(),
     prevContainments: [...(issue.prevContainments || []), { text: issue.containment || '', by: issue.containmentBy?.name || '', returnedBy: actor.name }],
-    containment: '', containmentAt: null
+    containment: '', containmentAt: null, optApprovalUids: [], signoffs: []
   });
 }
 // Repeat count and loss for one issue's station, used to decide a PSM referral
@@ -1023,6 +1035,12 @@ export function psmCheck(issue, sameStation, psm, now = Date.now()) {
   const byCount = Number(psm.minRepeats) > 0 && group.length >= Number(psm.minRepeats);
   const byLoss = Number(psm.minLossHours) > 0 && loss >= Number(psm.minLossHours);
   return { refer: byCount || byLoss, count: group.length, loss, reason: byCount ? `${group.length} repeats in ${psm.windowDays} days` : byLoss ? `${loss} loss hours in ${psm.windowDays} days` : '' };
+}
+// Optional approval by the initiator's manager, HOD or GM. It does not close the issue.
+export async function signoffIssue(issue, actor, note) {
+  const signoffs = [...(issue.signoffs || []).filter((x) => x.uid !== actor.uid), { uid: actor.uid, name: actor.name, level: Number(actor.level) || 0, note: String(note || '').trim(), at: Date.now() }];
+  await updateIssue(issue.id, { signoffs });
+  return signoffs;
 }
 export async function approveIssue(issue, actor, note, setup) {
   const same = await listIssuesAtStation(issue.station);
