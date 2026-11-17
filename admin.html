@@ -168,6 +168,7 @@
         <select id="ud" aria-label="Filter by department"><option value="">All departments</option>${DEPARTMENTS.filter((d) => d !== 'All').map((d) => `<option>${esc(d)}</option>`).join('')}</select>
         <select id="ur" aria-label="Filter by role"><option value="">All roles</option><option value="admin">Admin</option><option value="user">User</option></select>
         <span style="flex:1"></span>
+        <button type="button" class="btn btn-ghost" id="uTpl"><span>Download template</span></button>
         <button type="button" class="btn btn-ghost" id="uImp">${icon('upload')}<span>Import Excel</span></button>
         <button type="button" class="btn btn-primary" id="uAdd">${icon('plus')}<span>Add user</span></button>
       </div>
@@ -179,6 +180,7 @@
     panel.querySelector('#uq').oninput = f; panel.querySelector('#ud').onchange = f; panel.querySelector('#ur').onchange = f;
     panel.querySelector('#uAdd').onclick = () => userDialog(null);
     panel.querySelector('#uImp').onclick = importUsers;
+    panel.querySelector('#uTpl').onclick = downloadUserTemplate;
     drawUsers();
   }
 
@@ -290,6 +292,28 @@
     }
   }
 
+  async function downloadUserTemplate() {
+    try {
+      const X = await loadXLSX();
+      const head = ['User No', 'Employee Name', 'User ID', 'User Password', 'Role', 'Access Department 1', 'Access Department 2', 'Access Department 3', 'Level', 'Reports To (User ID)'];
+      const depts = DEPARTMENTS.filter((d) => d !== 'All');
+      const rows = [head,
+        [1, 'Example MD', '10000001', 'ChangeMe@1', 'User', 'All', '', '', 5, ''],
+        [2, 'Example Manager', '10000002', 'ChangeMe@2', 'User', depts[0] || '', depts[1] || '', '', 2, '10000001'],
+        [3, 'Example Engineer', '10000003', 'ChangeMe@3', 'User', depts[0] || '', '', '', 1, '10000002']];
+      const info = [['Column', 'What to enter'],
+        ['User No', 'Optional serial number'], ['Employee Name', 'Required'], ['User ID', 'Required. Employee ID, no spaces. This is what the user types to sign in'],
+        ['User Password', 'Required, at least 6 characters. Used once to create the login and not saved. The user must change it at first sign-in'],
+        ['Role', 'Optional. User (default) or Admin'], ['Access Department 1, 2, 3 …', 'At least one. Choose from: All, ' + depts.join(', ') + '. Add more columns (Access Department 4, 5 …) if needed. Several departments can also be written in one cell separated by commas'],
+        ['Level', '1 Engineer, 2 Manager, 3 HOD, 4 GM, 5 MD'], ['Reports To (User ID)', 'Optional. User ID of the person this user reports to. That person can be anywhere in the file or already in the database'],
+        ['Delete the three example rows before you upload.', '']];
+      const w1 = X.utils.aoa_to_sheet(rows), w2 = X.utils.aoa_to_sheet(info);
+      w1['!cols'] = [8, 24, 14, 16, 8, 20, 20, 20, 8, 20].map((w) => ({ wch: w })); w2['!cols'] = [30, 110].map((w) => ({ wch: w }));
+      const wb = X.utils.book_new(); X.utils.book_append_sheet(wb, w1, 'Users'); X.utils.book_append_sheet(wb, w2, 'Instructions');
+      X.writeFile(wb, 'User_Import_Template.xlsx'); toast('Template downloaded.');
+    } catch (e) { toast(e.message || friendlyError(e)); }
+  }
+
   async function importUsers() {
     const file = await pickFile(); if (!file) return;
     let parsed;
@@ -298,7 +322,7 @@
     const exist = new Set(state.users.map((u) => String(u.employeeId)));
     const rows = parsed.rows.map((r, i) => ({
       userNo: Number(r.userno) || i + 1, name: clean(r.employeename), employeeId: clean(r.userid),
-      level: Math.min(5, Math.max(1, Number(String(r.level ?? r.organizationlevel ?? '').match(/[1-5]/)?.[0]) || 1)), reportsToId: clean(r.reportsto ?? r.reportstoid ?? r.superiorid),
+      level: Math.min(5, Math.max(1, Number(String(r.level ?? r.organizationlevel ?? '').match(/[1-5]/)?.[0]) || 1)), reportsToId: clean(r.reportstouserid ?? r.reportsto ?? r.reportstoid ?? r.superiorid), role: /^admin/i.test(clean(r.role)) ? 'admin' : 'user',
       password: String(r.userpassword ?? '').trim(), departments: [...new Set(Object.keys(r).filter((k) => /^(accessdepartment|departments?)\d*$/.test(k)).flatMap((k) => String(r[k] ?? '').split(/[,;\/]/)).map(fixDept).filter(Boolean))]
     })).filter((r) => r.name || r.employeeId);
     rows.forEach((r) => {
@@ -313,7 +337,7 @@
       title: 'Import users', wide: true,
       html: `<p>Found <b>${rows.length}</b> rows in sheet “${esc(parsed.sheet)}”: <b>${todo.length}</b> ready to create, <b>${skipped.length}</b> skipped.</p>
         <p class="hint">The password column is used once to create each login. It is not saved in the database. Delete it from the Excel file afterwards.</p>
-        ${weak ? `<p class="hint"><b>${weak}</b> users have a password equal to their ID. They will be asked to change it at first sign-in. New users get the role User, and you can change that after the import.</p>` : ''}
+        ${weak ? `<p class="hint"><b>${weak}</b> users have a password equal to their ID. They will be asked to change it at first sign-in. Users get the role in the Role column (User if blank).</p>` : ''}
         ${skipped.length ? `<table class="sum"><tr><th>Skipped</th><th>User ID</th><th>Reason</th></tr>${skipped.slice(0, 12).map((r) => `<tr><td>${esc(r.name)}</td><td>${esc(r.employeeId)}</td><td>${esc(r.problem)}</td></tr>`).join('')}</table>` : ''}
         <div class="prog" id="ip" hidden><i></i></div><div class="hint" id="it"></div><div class="err" id="ie"></div>`,
       actions: [
@@ -331,7 +355,7 @@
         const r = todo[i];
         txt.textContent = `Creating ${i + 1} of ${todo.length}: ${r.name}`;
         try {
-          state.users.push(await createUser({ employeeId: r.employeeId, name: r.name, password: r.password, departments: r.departments, userNo: r.userNo, level: r.level }));
+          state.users.push(await createUser({ employeeId: r.employeeId, name: r.name, password: r.password, departments: r.departments, userNo: r.userNo, level: r.level, role: r.role }));
           ok++;
         } catch (e) { fails.push(`${r.name} (${r.employeeId}): ${friendlyError(e)}`); }
         bar.firstElementChild.style.width = Math.round(((i + 1) / todo.length) * 100) + '%';
@@ -1170,7 +1194,8 @@
             dates: {},
             okCount: 0,
             totalCount: 0,
-            reasons: new Set()
+            reasons: new Set(),
+            by: new Set()
           };
         }
         const s = stationMap[key];
@@ -1178,13 +1203,14 @@
         s.totalCount++;
         if (item.status === 'OK') s.okCount++;
         if (item.reason) s.reasons.add(item.reason);
+        if (c.name) s.by.add(String(c.name).replace(/\s*\(Import\)\s*$/, ''));
       });
     });
 
     // Build Excel data
     const header = ['Department', 'Line', 'Station', 'Min', 'Max', ...dates.map(d => {
       return new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' });
-    }), 'Compliance %', 'Unique Reasons'];
+    }), 'Compliance %', 'Unique Reasons', 'Submitted by'];
 
     const rows = Object.values(stationMap).map(s => {
       const compliance = s.totalCount ? Math.round((s.okCount / s.totalCount) * 100) : 0;
@@ -1196,7 +1222,8 @@
         s.max,
         ...dates.map(d => s.dates[d] ?? ''),
         compliance,
-        [...s.reasons].join(', ')
+        [...s.reasons].join(', '),
+        [...s.by].join(', ')
       ];
     });
 
@@ -1207,6 +1234,15 @@
     const ws = X.utils.aoa_to_sheet([header, ...rows]);
     const wb = X.utils.book_new();
     X.utils.book_append_sheet(wb, ws, 'Inventory History');
+    // Second sheet: one row per station per check, with who submitted it and when
+    const det = [['Date', 'Time', 'Department', 'Line', 'Station', 'Min', 'Max', 'Actual', 'Status', 'Reason', 'Submitted by', 'Employee ID', 'Entry type']];
+    list.slice().sort((a, b) => String(checkKey(a)).localeCompare(String(checkKey(b))) || (a.createdAt?.toMillis?.() || 0) - (b.createdAt?.toMillis?.() || 0)).forEach(c => {
+      const live = !c.backdated && !c.imported && c.createdAt?.toDate;
+      const time = live ? c.createdAt.toDate().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '';
+      (c.items || []).forEach(i => det.push([checkKey(c), time, c.department, c.line, i.stationName, Number(i.min), Number(i.max), Number(i.actual), i.status, i.reason || '',
+        String(c.name || '').replace(/\s*\(Import\)\s*$/, ''), c.employeeId || '', c.imported ? 'Imported' : c.backdated ? 'Past entry' : 'Submitted']));
+    });
+    X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(det), 'Check details');
     X.writeFile(wb, `Inventory_History_${new Date().toISOString().slice(0,10)}.xlsx`);
 
     toast('Export completed.');

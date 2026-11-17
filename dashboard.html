@@ -27,7 +27,7 @@
   }, 12000);
 </script>
 <script type="module">
-  import { startPage, icon, esc, toast, friendlyError, listInventoryChecks } from './js/wip-core.js';
+  import { startPage, icon, esc, toast, friendlyError, listInventoryChecks, listIssues, issueMs, issueNo, fmtDur, repeatKey } from './js/wip-core.js';
 
   const ctx = await startPage({ active: 'dashboard', title: 'Dashboard' });
   const main = ctx.main;
@@ -128,6 +128,16 @@
     }).filter((c) => c.day);
   } catch (e) { loadError = e; }
 
+  // Issue Report data (a failure here must not break the inventory charts)
+  let issAll = [], issErr = null;
+  try {
+    issAll = (await listIssues()).map((i) => { const ms = issueMs(i), d = ms ? new Date(ms) : null; const day = i.dateKey || (d ? localKey(d) : ''); return { ...i, ms, day, month: day.slice(0, 7) }; }).filter((i) => i.day);
+  } catch (e) { issErr = e; }
+  const issMonths = [...new Set(issAll.map((i) => i.month))].sort().reverse();
+  const issUniq = (k) => [...new Set(issAll.map((i) => i[k]).filter(Boolean))].sort();
+  const g = { month: '', area: '', dept: '', cat: '' };
+  const issFiltered = () => issAll.filter((i) => (!g.month || i.month === g.month) && (!g.area || i.area === g.area) && (!g.dept || i.respDept === g.dept) && (!g.cat || i.category === g.cat));
+
   const monthsAll = [...new Set(all.map((c) => c.month))].sort().reverse();
   const deptsAll = [...new Set(all.map((c) => c.department))].sort();
 
@@ -145,7 +155,7 @@
   const SECTIONS = [
     { key: 'overall', label: 'Overall', live: true },
     { key: 'inventory', label: 'Inventory', live: true },
-    { key: 'issue', label: 'Issue Report', icon: 'alert' },
+    { key: 'issue', label: 'Issue Report', live: true },
     { key: 'improvement', label: 'Improvement', icon: 'trend' },
     { key: 'multiskilling', label: 'Multiskilling', icon: 'users' },
     { key: 'shift', label: 'Shift Schedule', icon: 'calendar' },
@@ -170,6 +180,13 @@
       <button type="button" class="btn btn-ghost btn-sm" id="fr">Reset filters</button>
       <span class="grow"></span>
     </div>
+    <div class="filters" id="ifilters" hidden>
+      <select id="im" aria-label="Month"><option value="">All months</option>${issMonths.map((m) => `<option value="${m}">${monthName(m)}</option>`).join('')}</select>
+      <select id="ia" aria-label="Area"><option value="">All areas</option>${issUniq('area').map((d) => `<option>${esc(d)}</option>`).join('')}</select>
+      <select id="id" aria-label="Responsibility"><option value="">All responsibilities</option>${issUniq('respDept').map((d) => `<option>${esc(d)}</option>`).join('')}</select>
+      <select id="ic" aria-label="Category"><option value="">All categories</option>${issUniq('category').map((d) => `<option>${esc(d)}</option>`).join('')}</select>
+      <button type="button" class="btn btn-ghost btn-sm" id="ir">Reset filters</button>
+    </div>
     <div id="capture"></div>
     <section class="tools no-cap" id="tools" aria-label="Download and export"></section>`;
   const cap = main.querySelector('#capture');
@@ -183,13 +200,16 @@
   main.querySelector('#fd').onchange = (e) => { f.dept = e.target.value; syncLines(); render(); };
   main.querySelector('#fl').onchange = (e) => { f.line = e.target.value; render(); };
   main.querySelector('#fr').onclick = () => { f.month = f.dept = f.line = ''; ['fm', 'fd'].forEach((id) => { main.querySelector('#' + id).value = ''; }); syncLines(); render(); };
+  [['im', 'month'], ['ia', 'area'], ['id', 'dept'], ['ic', 'cat']].forEach(([id, k]) => { main.querySelector('#' + id).onchange = (e) => { g[k] = e.target.value; render(); }; });
+  main.querySelector('#ir').onclick = () => { g.month = g.area = g.dept = g.cat = ''; ['im', 'ia', 'id', 'ic'].forEach((id) => { main.querySelector('#' + id).value = ''; }); render(); };
   main.querySelectorAll('#tabs button').forEach((b) => { b.onclick = () => { location.hash = b.dataset.s; }; });
   window.addEventListener('hashchange', route);
   function route() {
     const h = location.hash.replace('#', '');
     section = SECTIONS.some((s) => s.key === h) ? h : 'overall';
     main.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.s === section));
-    main.querySelector('#filters').hidden = !SECTIONS.find((s) => s.key === section).live;
+    main.querySelector('#filters').hidden = !(section === 'overall' || section === 'inventory');
+    main.querySelector('#ifilters').hidden = section !== 'issue';
     render();
   }
 
@@ -262,7 +282,7 @@
       ${k('Lines covered', lines, '')}${k('Last check', last ? dayName(last) : '-', '')}</div>`;
   };
 
-  const filterText = () => [f.month ? monthName(f.month) : 'All months', f.dept || 'All departments', f.line || 'All lines'].join(' | ');
+  const filterText = () => section === 'issue' ? [g.month ? monthName(g.month) : 'All months', g.area || 'All areas', g.dept || 'All responsibilities', g.cat || 'All categories'].join(' | ') : [f.month ? monthName(f.month) : 'All months', f.dept || 'All departments', f.line || 'All lines'].join(' | ');
   const capHead = (title) => `<div class="cap-head" data-cap><h2>${esc(title)}</h2><p>${esc(SECTIONS.find((s) => s.key === section).live ? filterText() + ' | ' : '')}Generated ${new Date().toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })} by ${esc(ctx.name)}</p></div>`;
 
   /* ---------- Chart definitions ---------- */
@@ -344,6 +364,96 @@
       ${top.length ? `<div class="tbl-wrap" style="margin-top:10px"><table class="rt"><thead><tr><th>Reason</th><th class="n">Times</th></tr></thead><tbody>${top.map((e) => `<tr><td>${esc(e.raw)}</td><td class="n">${e.n}</td></tr>`).join('')}</tbody></table></div>` : '<div class="nodata">No reasons recorded for these filters.</div>'}</article>`;
   };
 
+
+  /* ---------- Issue Report section ---------- */
+  const ilevel = (i) => {
+    if (i.status !== 'open') return Number(i.escalationLevel) || 1;
+    const L = i.lead || {}, m = (Date.now() - i.ms) / 60000;
+    return m >= (L.t5 ?? 2880) ? 5 : m >= (L.t4 ?? 1440) ? 4 : m >= (L.t3 ?? 900) ? 3 : 1;
+  };
+  const isOverdue = (i) => i.status === 'open' && (Date.now() - i.ms) / 60000 > (i.lead?.target ?? 450);
+  const STS = [['closed', 'Closed', C.good], ['pending', 'Waiting approval', C.orange], ['open', 'Open', C.bad]];
+  const cnt = (list, keyFn) => { const m = new Map(); list.forEach((i) => { const k = keyFn(i); if (!k) return; const t = m.get(k) || { closed: 0, pending: 0, open: 0, n: 0, hours: 0 }; t[i.status === 'closed' ? 'closed' : i.status === 'pending' ? 'pending' : 'open']++; t.n++; t.hours += Number(i.hoursTotal) || 0; m.set(k, t); }); return m; };
+  const statusSeries = (m, keys) => STS.map(([k, l, col]) => { const data = keys.map((x) => m.get(x)[k]); return { label: l, table: l, data, ds: barDs(l, data, col, { stacked: true }) }; });
+  const round1 = (n) => Math.round(n * 10) / 10;
+
+  const imk = {
+    weekly(list) {
+      const m = cnt(list, (i) => i.weekMonth || ''); const first = new Map(); list.forEach((i) => { const w = i.weekMonth || ''; if (w && (!first.has(w) || i.day < first.get(w))) first.set(w, i.day); });
+      const keys = [...m.keys()].sort((a, b) => first.get(a).localeCompare(first.get(b))).slice(-12);
+      return chartCard({ title: 'Weekly issue status', sub: 'Latest 12 weeks: closed, waiting approval and open', labels: keys, firstCol: 'Week', series: statusSeries(m, keys), options: (() => { const o = baseOpts({ legend: true, stacked: true }); o.scales.x.ticks = { ...o.scales.x.ticks, minRotation: 40, maxRotation: 50 }; return o; })() });
+    },
+    monthly(list) {
+      const m = cnt(list, (i) => i.month), keys = [...m.keys()].sort();
+      return chartCard({ title: 'Monthly issue status', sub: 'Issues raised each month', labels: keys.map(monthName), firstCol: 'Month', series: statusSeries(m, keys), options: baseOpts({ legend: true, stacked: true }) });
+    },
+    escalation(list) {
+      const t = [0, 0, 0, 0, 0]; list.forEach((i) => { t[ilevel(i) - 1]++; });
+      const labels = ['L1 Engineer', 'L2 Manager', 'L3 HOD', 'L4 GM', 'L5 MD'];
+      return chartCard({ title: 'Escalation level', sub: 'Level that took the action; open issues show the level they have reached', labels, firstCol: 'Level',
+        series: [{ label: 'Issues', data: t, ds: barDs('Issues', t, C.blue) }], options: baseOpts({ labels: ' ' }) });
+    },
+    byResp(list) {
+      const m = cnt(list, (i) => i.respDept), keys = [...m.keys()].sort((a, b) => m.get(b).n - m.get(a).n || a.localeCompare(b));
+      return chartCard({ title: 'Responsibility-wise issues', sub: 'Which department the issues belong to', labels: keys, firstCol: 'Department', height: Math.max(220, keys.length * 34 + 70),
+        series: STS.map(([k, l, col]) => { const data = keys.map((x) => m.get(x)[k]); return { label: l, table: l, data, ds: barDs(l, data, col, { stacked: true, horiz: true, thick: 20 }) }; }), options: baseOpts({ horiz: true, legend: true, stacked: true }) });
+    },
+    byCat(list) {
+      const m = cnt(list, (i) => i.category), keys = [...m.keys()].sort((a, b) => m.get(b).n - m.get(a).n), data = keys.map((k) => m.get(k).n);
+      return chartCard({ title: 'Issue category', sub: 'Number of issues by category', labels: keys, firstCol: 'Category', height: Math.max(200, keys.length * 34 + 50),
+        series: [{ label: 'Issues', data, ds: barDs('Issues', data, C.blue, { horiz: true, thick: 20 }) }], options: baseOpts({ horiz: true, labels: ' ' }) });
+    },
+    byArea(list) {
+      const m = cnt(list, (i) => i.area), keys = [...m.keys()].sort((a, b) => m.get(b).n - m.get(a).n);
+      return chartCard({ title: 'Area-wise issues', sub: 'Where the issues were found', labels: keys, firstCol: 'Area', series: statusSeries(m, keys), options: baseOpts({ legend: true, stacked: true }) });
+    },
+    topLoss(list) {
+      const m = new Map(); list.forEach((i) => { const k = `${i.station || '-'} (${i.line || '-'})`; m.set(k, (m.get(k) || 0) + (Number(i.hoursTotal) || 0)); });
+      const top = [...m.entries()].filter((x) => x[1] > 0).sort((a, b) => b[1] - a[1]).slice(0, 5), data = top.map((x) => round1(x[1]));
+      return chartCard({ title: 'Top 5 stations by man-hour loss', sub: 'Total hours lost = MP x machines x downtime', labels: top.map((x) => x[0]), firstCol: 'Station', height: Math.max(200, top.length * 40 + 50),
+        series: [{ label: 'Hours lost', data, ds: barDs('Hours lost', data, C.bad, { horiz: true, thick: 22 }) }], options: baseOpts({ horiz: true, labels: ' ' }) });
+    },
+    leadAch(list) {
+      const m = new Map(); list.forEach((i) => { if (!i.respDept || !i.leadResult) return; const t = m.get(i.respDept) || { ok: 0, n: 0 }; t.n++; if (i.leadResult === 'Achieved') t.ok++; m.set(i.respDept, t); });
+      const keys = [...m.keys()].sort(), data = keys.map((k) => pct(m.get(k).ok, m.get(k).n));
+      return chartCard({ title: 'Lead time achieved', sub: 'Share of issues with containment inside the target time', labels: keys, firstCol: 'Department', suffix: '%',
+        series: [{ label: 'Achieved %', data, ds: barDs('Achieved %', data, C.aqua) }], options: baseOpts({ pctAxis: true, labels: '%' }) });
+    }
+  };
+  const repeatedTable = (list) => {
+    const g2 = new Map(); list.forEach((i) => { const k = repeatKey(i); const e = g2.get(k) || { i, n: 0, h: 0, psm: false }; e.n++; e.h += Number(i.hoursTotal) || 0; e.psm = e.psm || !!i.psmRefer; g2.set(k, e); });
+    const rows = [...g2.values()].filter((e) => e.n >= 2).sort((a, b) => b.n - a.n || b.h - a.h).slice(0, 8);
+    return `<article class="cc row1" data-cap><div class="cc-h"><div><h3>Repeated issues</h3><p class="sub">Same station and category raised more than once</p></div></div>
+      ${rows.length ? `<div class="tbl-wrap" style="margin-top:10px"><table class="rt"><thead><tr><th>Area</th><th>Line</th><th>Station</th><th>Category</th><th class="n">Times</th><th class="n">Hours lost</th><th>PSM</th></tr></thead><tbody>
+      ${rows.map((e) => `<tr><td>${esc(e.i.area || '')}</td><td>${esc(e.i.line || '')}</td><td>${esc(e.i.station || '')}</td><td>${esc(e.i.category || '')}</td><td class="n">${e.n}</td><td class="n">${round1(e.h)}</td><td>${e.psm ? 'Refer to PSM' : '-'}</td></tr>`).join('')}</tbody></table></div>` : '<div class="nodata">No repeated issues.</div>'}</article>`;
+  };
+  const overdueTable = (list) => {
+    const rows = list.filter(isOverdue).sort((a, b) => a.ms - b.ms).slice(0, 8);
+    return `<article class="cc row1" data-cap><div class="cc-h"><div><h3>Open issues past their target time</h3><p class="sub">Oldest first</p></div></div>
+      ${rows.length ? `<div class="tbl-wrap" style="margin-top:10px"><table class="rt"><thead><tr><th>No.</th><th>Reported</th><th>Area</th><th>Station</th><th>Category</th><th>Responsibility</th><th class="n">Open for</th><th class="n">Level</th></tr></thead><tbody>
+      ${rows.map((i) => `<tr><td>${esc(issueNo(i))}</td><td>${dayName(i.day)}</td><td>${esc(i.area || '')}</td><td>${esc(i.station || '')}</td><td>${esc(i.category || '')}</td><td>${esc(i.respDept || '')}</td><td class="n">${esc(fmtDur((Date.now() - i.ms) / 60000))}</td><td class="n">${ilevel(i)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="nodata">No open issue is past its target time.</div>'}</article>`;
+  };
+  function renderIssue(title) {
+    if (issErr) { cap.innerHTML = capHead(title) + `<div class="cc row1" data-cap><div class="nodata"><b>Could not load issues.</b><br>${esc(friendlyError(issErr))}</div></div>`; return; }
+    const list = issFiltered(), draws = [], add = (c) => { draws.push(c.draw); return c.html; }, pair = (a, b) => `<div class="row2" data-cap>${a}${b}</div>`;
+    let html = capHead(title);
+    if (!list.length) { html += `<div class="cc row1" data-cap><div class="nodata">${issAll.length ? 'No issues match these filters.' : 'No issues have been raised yet. Charts appear after the first issue.'}</div></div>`; cap.innerHTML = html; return; }
+    const n = list.length, cl = list.filter((i) => i.status === 'closed').length, pe = list.filter((i) => i.status === 'pending').length, op = list.filter((i) => i.status === 'open').length;
+    const withLead = list.filter((i) => i.leadResult), ach = withLead.filter((i) => i.leadResult === 'Achieved').length;
+    const hrs = round1(list.reduce((a, i) => a + (Number(i.hoursTotal) || 0), 0)), cost = list.reduce((a, i) => a + (Number(i.mhCost) || 0), 0);
+    const rep = list.filter((i) => i.repeat === 'Repeated').length, psm = list.filter((i) => i.psmRefer).length;
+    const k = (l, v, s) => `<div class="kpi"><span>${l}</span><b>${v}</b>${s ? `<small>${s}</small>` : ''}</div>`;
+    html += `<div class="kpis" data-cap>${k('Issues raised', n, '')}${k('Closed', cl, pct(cl, n) + '% of issues')}${k('Open', op + pe, `${op} open, ${pe} waiting approval`)}${k('Past target', list.filter(isOverdue).length, 'Open beyond lead time')}${k('Lead time achieved', withLead.length ? pct(ach, withLead.length) + '%' : '-', '')}${k('Hours lost', hrs, cost ? 'Cost ' + cost.toLocaleString('en-IN') : '')}</div>`;
+    html += pair(add(imk.weekly(list)), add(imk.monthly(list)));
+    html += pair(add(imk.escalation(list)), add(imk.leadAch(list)));
+    html += `<div class="row1" data-cap>${add(imk.byResp(list))}</div>`;
+    html += pair(add(imk.byCat(list)), add(imk.byArea(list)));
+    html += `<div class="row1" data-cap>${add(imk.topLoss(list))}</div>`;
+    html += `<div data-cap>${repeatedTable(list)}</div><div data-cap>${overdueTable(list)}</div>`;
+    html += `<p class="sub" data-cap style="margin:10px 2px">Repeated: ${rep} of ${n} issues. Referred to PSM: ${psm}.</p>`;
+    cap.innerHTML = html; wire(draws);
+  }
+
   /* ---------- Render ---------- */
   function render() {
     charts.splice(0).forEach((c) => c.destroy());
@@ -355,6 +465,7 @@
         <p>Charts will appear here once the ${esc(s.label)} page is live and its data is being captured.</p></div>`;
       return;
     }
+    if (section === 'issue') { renderIssue(title); return; }
     const list = filtered(), rows = flat(list), draws = [];
     const add = (c) => { draws.push(c.draw); return c.html; };
     const pair = (a, b) => `<div class="row2" data-cap>${a}${b}</div>`;
@@ -376,7 +487,9 @@
       html += `<div class="row1" data-cap>${add(mk.topStations(rows))}</div>`;
       html += `<div data-cap>${notOkTable(rows, 'Latest Not OK stations', 'Most recent stations outside min and max')}</div><div data-cap>${reasonsTable(rows)}</div>`;
     }
-    cap.innerHTML = html;
+    cap.innerHTML = html; wire(draws);
+  }
+  function wire(draws) {
     cap.querySelectorAll('.tgl').forEach((b) => {
       b.onclick = () => {
         const on = b.getAttribute('aria-pressed') !== 'true';
@@ -398,7 +511,12 @@
       <p class="sub">Excel file with every station check, plus a summary by department and month.</p>
       <div class="fg"><div><label class="l" for="xm">Month</label><select id="xm"><option value="">All months</option>${monthsAll.map((m) => `<option value="${m}">${monthName(m)}</option>`).join('')}</select></div>
       <div><label class="l" for="xd">Department</label><select id="xd"><option value="">All departments</option>${deptsAll.map((d) => `<option>${esc(d)}</option>`).join('')}</select></div></div>
-      <div class="row"><button type="button" class="btn btn-primary" id="xGo"><span>Export Excel</span></button></div><div class="hint" id="xMsg"></div></article>`;
+      <div class="row"><button type="button" class="btn btn-primary" id="xGo"><span>Export Excel</span></button></div><div class="hint" id="xMsg"></div></article>
+    <article class="cc"><h3>Export issue data</h3>
+      <p class="sub">Excel file with every issue in the tracker layout, plus a summary by responsibility.</p>
+      <div class="fg"><div><label class="l" for="im2">Month</label><select id="im2"><option value="">All months</option>${issMonths.map((m) => `<option value="${m}">${monthName(m)}</option>`).join('')}</select></div>
+      <div><label class="l" for="id2">Responsibility</label><select id="id2"><option value="">All responsibilities</option>${issUniq('respDept').map((d) => `<option>${esc(d)}</option>`).join('')}</select></div></div>
+      <div class="row"><button type="button" class="btn btn-primary" id="iGo"><span>Export Excel</span></button></div><div class="hint" id="iMsg"></div></article>`;
 
   const stamp = () => localKey(new Date());
   async function snapshot() {
@@ -463,6 +581,26 @@
       X.utils.book_append_sheet(wb, w1, 'Station checks'); X.utils.book_append_sheet(wb, w2, 'Summary');
       X.writeFile(wb, `Inventory_Export_${month || 'All-months'}_${(dept || 'All-departments').replace(/\s+/g, '-')}.xlsx`);
       msg.textContent = `Exported ${detail.length - 1} station checks.`;
+    } catch (e) { msg.textContent = friendlyError(e); }
+    b.disabled = false;
+  };
+
+  tools.querySelector('#iGo').onclick = async (ev) => {
+    const b = ev.currentTarget, msg = tools.querySelector('#iMsg'), month = tools.querySelector('#im2').value, dept = tools.querySelector('#id2').value;
+    const list = issAll.filter((i) => (!month || i.month === month) && (!dept || i.respDept === dept)).sort((a, c) => a.ms - c.ms);
+    if (!list.length) { msg.textContent = 'There are no issues for this month and responsibility.'; return; }
+    b.disabled = true; msg.textContent = 'Preparing…';
+    try {
+      const X = await lib('xlsx'), dt = (ms) => { if (!ms) return ''; const d = new Date(ms); return `${localKey(d)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
+      const head = ['SN', 'Issue No', 'Issue Report Date & Time', 'Week-Month', 'Dept./Area', 'Line', 'Nature of Issue', 'Station Name', 'Model & MSN-PSN', 'Part Number', 'Problem Description', 'Issue Category', 'Responsibility', 'Issue Reported By', 'Responsible User', 'Approved By', 'Repeatation', 'Containment Action', 'Containment Action Date & Time', 'Delay (Min)', 'Lead Time Result', 'Issue Escalation Level', 'Total MP', 'No. of M/C', 'Downtime (Hours)', 'Hours Total', 'Total MH Loss Cost', 'Status'];
+      const rows = list.map((i, n) => [n + 1, issueNo(i), dt(i.ms), i.weekMonth || '', i.area || '', i.line || '', i.nature || '', i.station || '', i.model || '', i.partNumber || '', i.description || '', i.category || '', i.respDept || '', i.reportedByName || '', i.responsibleName || '', i.approvedBy?.name || '', i.repeat || '', i.containment || '', dt(i.containmentAt?.toMillis?.() || 0), i.delayMin ?? '', i.leadResult || '', i.status === 'open' ? '' : (i.escalationLevel || ''), i.mp || 0, i.mc || 0, i.downtimeH || 0, i.hoursTotal || 0, i.mhCost || 0, i.status === 'closed' ? (i.psmRefer ? 'Handover to PSM' : 'Closed') : i.status === 'pending' ? 'Waiting for approval' : 'Open']);
+      const gm = cnt(list, (i) => i.respDept), sum = [['Responsibility', 'Issues', 'Closed', 'Waiting approval', 'Open', 'Hours lost']];
+      [...gm.keys()].sort().forEach((k) => { const t = gm.get(k); sum.push([k, t.n, t.closed, t.pending, t.open, round1(t.hours)]); });
+      const w1 = X.utils.aoa_to_sheet([head, ...rows]), w2 = X.utils.aoa_to_sheet(sum);
+      w1['!cols'] = head.map((h) => ({ wch: /Description|Action/.test(h) ? 40 : 16 }));
+      const wb = X.utils.book_new(); X.utils.book_append_sheet(wb, w1, 'Issues'); X.utils.book_append_sheet(wb, w2, 'Summary');
+      X.writeFile(wb, `Issue_Export_${month || 'All-months'}_${(dept || 'All-responsibilities').replace(/\s+/g, '-')}.xlsx`);
+      msg.textContent = `Exported ${list.length} issues.`;
     } catch (e) { msg.textContent = friendlyError(e); }
     b.disabled = false;
   };
