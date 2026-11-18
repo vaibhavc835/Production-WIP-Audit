@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0b1220">
+  <title>Audit | Production WIP Audit</title>
+  <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+  <link rel="modulepreload" href="js/wip-core.js">
+  <link rel="modulepreload" href="js/firebase-config.js">
+  <style>
+    html,body{margin:0;background:#0b1220}
+    #boot{position:fixed;inset:0;display:grid;place-items:center;text-align:center;background:linear-gradient(135deg,#0b1220,#12304f);color:#cbd5e1;font:15px 'Segoe UI',system-ui,sans-serif}
+    #boot i{display:block;width:34px;height:34px;margin:0 auto 14px;border-radius:50%;border:3px solid rgba(255,255,255,.2);border-top-color:#4ade80;animation:bootspin .8s linear infinite}
+    #boot p{margin-top:10px;max-width:300px;font-size:13.5px;color:#94a3b8}
+    @keyframes bootspin{to{transform:rotate(360deg)}}
+    @media (prefers-reduced-motion:reduce){#boot i{animation:none}}
+  </style>
+</head>
+<body>
+<div id="boot" role="status"><div><i></i>Loading Production WIP Audit…</div></div>
+<script>
+  setTimeout(function () {
+    var b = document.getElementById('boot');
+    if (b) b.firstElementChild.insertAdjacentHTML('beforeend', '<p>This is taking longer than usual. Check your internet connection, then reload the page.</p>');
+  }, 12000);
+</script>
+<script type="module">
+  import {
+    startPage, icon, esc, toast, openModal, friendlyError,
+    listStations, listColl, listAuditForms, listAuditResponses, submitAudit, dayKeyOf
+  } from './js/wip-core.js';
+
+  const ctx = await startPage({ active: 'audit', title: 'Audit' });
+  const main = ctx.main;
+
+  const st = document.createElement('style');
+  st.textContent = `
+  .aud [hidden]{display:none!important}
+  .aud .forms{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+  .aud .fcard{background:#fff;border:1px solid var(--line);border-top:6px solid var(--navy);border-radius:12px;padding:14px 16px;text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:6px}
+  .aud .fcard:hover{box-shadow:0 2px 12px rgba(15,23,42,.1)}
+  .aud .fcard b{font-size:16px}.aud .fcard span{color:var(--muted);font-size:13.5px}
+  .aud h2.sec{font-size:16px;margin:26px 0 10px}
+  .aud .gf{max-width:780px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
+  .aud .gc{background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px 18px}
+  .aud .gc.head{border-top:8px solid var(--navy)}
+  .aud .gc.head h1{margin:0 0 6px;font-size:24px}
+  .aud .gc.bad{border-color:#dc2626;box-shadow:0 0 0 1px #dc2626}
+  .aud .gc .q{font-weight:600;font-size:15.5px;margin-bottom:8px}.aud .gc .q i{color:#dc2626;font-style:normal}
+  .aud .crit{background:#f1f5f9;border-left:4px solid #94a3b8;border-radius:6px;padding:8px 12px;margin:0 0 12px;font-size:14px;white-space:pre-wrap}
+  .aud .crit small{display:block;color:var(--muted);font-weight:600;margin-bottom:2px}
+  .aud .opts{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+  .aud .opt{position:relative}
+  .aud .opt input{position:absolute;opacity:0;inset:0;cursor:pointer;width:100%;height:100%;margin:0}
+  .aud .opt span{display:inline-block;padding:8px 16px;border:1px solid var(--line);border-radius:999px;font-weight:600;font-size:14px;background:#fff;color:var(--ink2)}
+  .aud .opt input:focus-visible+span{outline:2px solid #2563eb;outline-offset:2px}
+  .aud .opt input:checked+span.ok{background:#dcfce7;border-color:#16a34a;color:#166534}
+  .aud .opt input:checked+span.nok{background:#fee2e2;border-color:#dc2626;color:#991b1b}
+  .aud .opt input:checked+span.na{background:#e2e8f0;border-color:#64748b;color:#334155}
+  .aud .err2{color:#b91c1c;font-size:13px;margin-top:6px}
+  .aud .bar{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+  .aud .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600;background:#f1f5f9;color:#334155;white-space:nowrap}
+  .aud .pill.red{background:#fee2e2;color:#991b1b}.aud .pill.green{background:#dcfce7;color:#166534}.aud .pill.grey{background:#e2e8f0}
+  .aud .big{font-size:34px;font-weight:700}
+  .aud .rtbl td small{color:var(--muted)}
+  @media (max-width:640px){.aud .gc{padding:14px}.aud .opt span{padding:8px 13px}}
+  `;
+  document.head.appendChild(st);
+
+  /* ---------- helpers ---------- */
+  const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const when = (r) => { const d = r.createdAt?.toDate?.(); return d ? `${String(d.getDate()).padStart(2, '0')}-${MON[d.getMonth()]}-${d.getFullYear()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : '-'; };
+  const clean = (v) => String(v ?? '').replace(/\s+/g, ' ').trim();
+  const RESULT = { ok: ['Meets criteria', 'green'], nok: ['Does not meet', 'red'], na: ['Not applicable', 'grey'] };
+
+  main.innerHTML = '<div class="aud" id="aud"><div class="empty">Loading…</div></div>';
+  const root = main.querySelector('#aud');
+
+  let forms = [], places = new Map();   // places: department -> Set of lines
+  async function loadBase() {
+    const [f, inv, iss] = await Promise.all([listAuditForms(), listStations().catch(() => []), listColl('issueStations').catch(() => [])]);
+    forms = f.filter((x) => x.active !== false);
+    const add = (d, l) => { d = clean(d); l = clean(l); if (!d) return; if (!places.has(d)) places.set(d, new Set()); if (l) places.get(d).add(l); };
+    inv.forEach((s) => add(s.department, s.line)); iss.forEach((s) => add(s.area, s.line));
+  }
+  try { await loadBase(); } catch (e) { root.innerHTML = `<div class="empty"><b>Could not load the audit forms.</b><p>${esc(friendlyError(e))}</p></div>`; throw e; }
+
+  /* ---------- list of forms and recent responses ---------- */
+  async function showList() {
+    root.innerHTML = `<div class="page-head"><div><h1>Audit</h1><p class="sub">Choose an audit form, fill it in on the shop floor and submit.</p></div>
+      ${ctx.isAdmin ? '<a class="btn btn-ghost" href="admin.html#auditforms">Manage audit forms</a>' : ''}</div>
+      ${forms.length ? `<div class="forms">${forms.map((f) => `<button type="button" class="fcard" data-id="${esc(f.id)}"><b>${esc(f.title)}</b><span>${esc(f.description || '')}</span><span>${(f.points || []).length} audit points</span></button>`).join('')}</div>`
+        : `<div class="empty"><b>No audit form yet.</b><p>${ctx.isAdmin ? 'Create one in Admin Control, Audit Forms.' : 'The administrator has not created an audit form yet.'}</p></div>`}
+      <h2 class="sec">Recent responses</h2><div id="recent"><div class="empty">Loading…</div></div>`;
+    root.querySelectorAll('.fcard').forEach((b) => { b.onclick = () => { location.hash = 'form=' + b.dataset.id; }; });
+    const box = root.querySelector('#recent');
+    try {
+      const rows = await listAuditResponses({ max: 10 });
+      box.innerHTML = rows.length ? `<div class="tbl-wrap"><table class="tbl rtbl"><thead><tr><th>Date and time</th><th>Audit form</th><th>Department</th><th>Line</th><th>Audited by</th><th class="num">Meets</th><th class="num">Does not meet</th><th class="num">Score</th></tr></thead><tbody>
+        ${rows.map((r) => `<tr data-id="${esc(r.id)}" style="cursor:pointer"><td data-label="Date">${esc(when(r))}</td><td data-label="Form"><b>${esc(r.formTitle)}</b></td><td data-label="Department">${esc(r.department)}</td><td data-label="Line">${esc(r.line)}</td><td data-label="Audited by">${esc(r.auditorName)}</td>
+          <td class="num" data-label="Meets">${r.counts?.ok ?? 0}</td><td class="num" data-label="Does not meet">${r.counts?.nok ? `<span class="pill red">${r.counts.nok}</span>` : 0}</td><td class="num" data-label="Score">${r.score != null ? r.score + '%' : '-'}</td></tr>`).join('')}</tbody></table></div><div class="note">Latest ${rows.length} responses from everyone. Select a row to see the details.</div>`
+        : '<div class="empty">No responses yet.</div>';
+      box.querySelectorAll('tr[data-id]').forEach((tr) => { tr.onclick = () => detail(rows.find((r) => r.id === tr.dataset.id)); });
+    } catch (e) { box.innerHTML = `<div class="empty">${esc(friendlyError(e))}</div>`; }
+  }
+
+  function detail(r) {
+    if (!r) return;
+    openModal({
+      title: r.formTitle, wide: true,
+      html: `<p class="hint">${esc(when(r))} · ${esc(r.department)}${r.deptOther ? ' (other)' : ''} · ${esc(r.line)}${r.lineOther ? ' (other)' : ''} · audited by ${esc(r.auditorName)}${r.auditorEmployeeId ? ' (' + esc(r.auditorEmployeeId) + ')' : ''}</p>
+        <p><span class="pill green">${r.counts?.ok ?? 0} meet</span> <span class="pill red">${r.counts?.nok ?? 0} do not meet</span> <span class="pill grey">${r.counts?.na ?? 0} not applicable</span> ${r.score != null ? `<b style="margin-left:8px">Score ${r.score}%</b>` : ''}</p>
+        <div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th>Audit point</th><th>Criteria</th><th>Observation</th><th>Remark</th></tr></thead><tbody>
+        ${(r.answers || []).map((a, i) => `<tr><td data-label="#">${i + 1}</td><td data-label="Audit point"><b>${esc(a.point)}</b></td><td data-label="Criteria">${esc(a.criteria)}</td><td data-label="Observation"><span class="pill ${RESULT[a.result]?.[1] || ''}">${esc(RESULT[a.result]?.[0] || a.result)}</span></td><td data-label="Remark">${esc(a.remark || '')}</td></tr>`).join('')}</tbody></table></div>`,
+      actions: [{ label: 'Close', onClick: (x) => x.close() }]
+    });
+  }
+
+  /* ---------- fill a form ---------- */
+  function showForm(f) {
+    const deptList = [...places.keys()].sort();
+    const O = '__other__';
+    root.innerHTML = `<div class="gf"><a href="#" id="back" style="font-size:14px">← All audit forms</a>
+      <div class="gc head"><h1>${esc(f.title)}</h1><div style="white-space:pre-wrap;color:var(--ink2)">${esc(f.description || '')}</div><p class="hint" style="margin:10px 0 0">Audited by ${esc(ctx.name)}. <span style="color:#dc2626">*</span> Required</p></div>
+      <div class="gc" data-q="dept"><div class="q">Department <i>*</i></div>
+        <select id="a_dept"><option value="">Choose</option>${deptList.map((d) => `<option>${esc(d)}</option>`).join('')}<option value="${O}">Other (type below)</option></select>
+        <input id="a_dept_o" placeholder="Type the department" maxlength="80" style="margin-top:8px" hidden><div class="err2" hidden></div></div>
+      <div class="gc" data-q="line"><div class="q">Line <i>*</i></div>
+        <select id="a_line"><option value="">Choose the department first</option></select>
+        <input id="a_line_o" placeholder="Type the line or area" maxlength="80" style="margin-top:8px" hidden><div class="err2" hidden></div></div>
+      ${(f.points || []).map((p, i) => `<div class="gc" data-q="p${i}"><div class="q">${i + 1}. ${esc(p.point)} <i>*</i></div>
+        <div class="crit"><small>Criteria</small>${esc(p.criteria)}</div>
+        <div class="opts" role="radiogroup" aria-label="Observation for point ${i + 1}">
+          ${['ok', 'nok', 'na'].map((k) => `<label class="opt"><input type="radio" name="r${i}" value="${k}"><span class="${k}">${RESULT[k][0]}</span></label>`).join('')}</div>
+        <label class="l" for="rm${i}">Remark / note <span class="rq" id="rq${i}"></span></label><textarea id="rm${i}" rows="2" maxlength="500" placeholder="What did you observe?"></textarea><div class="err2" hidden></div></div>`).join('')}
+      <div class="gc bar"><span class="hint" id="prog"></span><span><button type="button" class="btn btn-ghost" id="clr">Clear form</button> <button type="button" class="btn btn-primary" id="sub">Submit</button></span></div></div>`;
+    const $ = (id) => root.querySelector('#' + id);
+    root.querySelector('#back').onclick = (e) => { e.preventDefault(); location.hash = ''; };
+    const deptV = () => $('a_dept').value;
+    const fillLines = () => {
+      const d = deptV(), ln = $('a_line'), lo = $('a_line_o');
+      $('a_dept_o').hidden = d !== O;
+      if (d === O) { ln.innerHTML = `<option value="${O}">Other (type below)</option>`; ln.value = O; ln.disabled = true; lo.hidden = false; return; }
+      ln.disabled = false;
+      const lines = d ? [...(places.get(d) || [])].sort() : [];
+      ln.innerHTML = `<option value="">${d ? 'Choose' : 'Choose the department first'}</option>${lines.map((l) => `<option>${esc(l)}</option>`).join('')}${d ? `<option value="${O}">Other (type below)</option>` : ''}`;
+      lo.hidden = true;
+    };
+    $('a_dept').onchange = fillLines;
+    $('a_line').onchange = () => { $('a_line_o').hidden = $('a_line').value !== O; };
+    const pts = f.points || [];
+    const prog = () => { const n = pts.filter((_, i) => root.querySelector(`input[name="r${i}"]:checked`)).length; $('prog').textContent = `${n} of ${pts.length} audit points answered`; };
+    pts.forEach((_, i) => {
+      root.querySelectorAll(`input[name="r${i}"]`).forEach((r) => { r.onchange = () => { $('rq' + i).innerHTML = r.value === 'nok' ? '<b style="color:#dc2626">(required)</b>' : ''; root.querySelector(`[data-q="p${i}"]`).classList.remove('bad'); prog(); }; });
+    });
+    prog();
+    $('clr').onclick = () => { if (confirm('Clear everything you entered?')) showForm(f); };
+    const flag = (q, msg) => { const c = root.querySelector(`[data-q="${q}"]`); c.classList.add('bad'); const e = c.querySelector('.err2'); e.textContent = msg; e.hidden = false; return c; };
+    $('sub').onclick = async (ev) => {
+      root.querySelectorAll('.gc.bad').forEach((c) => { c.classList.remove('bad'); c.querySelector('.err2').hidden = true; });
+      let first = null; const bad = (q, m) => { const c = flag(q, m); first = first || c; };
+      const dOther = deptV() === O, lOther = $('a_line').value === O;
+      const department = dOther ? clean($('a_dept_o').value) : deptV(), line = lOther ? clean($('a_line_o').value) : $('a_line').value;
+      if (!department) bad('dept', dOther ? 'Type the department.' : 'Choose the department.');
+      if (!line) bad('line', lOther ? 'Type the line or area.' : 'Choose the line.');
+      const answers = pts.map((p, i) => {
+        const r = root.querySelector(`input[name="r${i}"]:checked`)?.value || '', remark = clean($('rm' + i).value);
+        if (!r) bad('p' + i, 'Select an observation.'); else if (r === 'nok' && !remark) bad('p' + i, 'Write a remark: this point does not meet the criteria.');
+        return { id: p.id || String(i), point: p.point, criteria: p.criteria, result: r, remark };
+      });
+      if (first) { first.scrollIntoView({ behavior: 'smooth', block: 'center' }); toast('Please complete the highlighted questions.'); return; }
+      const counts = { total: answers.length, ok: answers.filter((a) => a.result === 'ok').length, nok: answers.filter((a) => a.result === 'nok').length, na: answers.filter((a) => a.result === 'na').length };
+      const scored = counts.ok + counts.nok, score = scored ? Math.round((counts.ok / scored) * 1000) / 10 : null;
+      ev.currentTarget.disabled = true;
+      try {
+        await submitAudit({ formId: f.id, formTitle: f.title, department, deptOther: dOther, line, lineOther: lOther, answers, counts, score,
+          auditorName: ctx.name, auditorEmployeeId: ctx.employeeId || '', dateKey: dayKeyOf(new Date()) });
+        done(f, counts, score);
+      } catch (e) { toast(friendlyError(e)); ev.currentTarget.disabled = false; }
+    };
+  }
+
+  function done(f, counts, score) {
+    window.scrollTo({ top: 0 });
+    root.innerHTML = `<div class="gf"><div class="gc head"><h1>Response recorded</h1><p>Your response to <b>${esc(f.title)}</b> has been saved.</p>
+      <div class="big">${score != null ? score + '%' : '-'}</div><p><span class="pill green">${counts.ok} meet</span> <span class="pill red">${counts.nok} do not meet</span> <span class="pill grey">${counts.na} not applicable</span></p>
+      <p style="margin-top:14px"><button type="button" class="btn btn-primary" id="again">Submit another response</button> <button type="button" class="btn btn-ghost" id="home">Back to all forms</button></p></div></div>`;
+    root.querySelector('#again').onclick = () => showForm(f);
+    root.querySelector('#home').onclick = () => { location.hash = ''; showList(); };
+  }
+
+  /* ---------- routing ---------- */
+  function route() {
+    const m = location.hash.match(/^#form=(.+)$/), f = m && forms.find((x) => x.id === decodeURIComponent(m[1]));
+    if (f) { window.scrollTo({ top: 0 }); showForm(f); } else showList();
+  }
+  window.addEventListener('hashchange', route);
+  route();
+</script>
+</body>
+</html>

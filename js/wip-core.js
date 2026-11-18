@@ -22,7 +22,7 @@ const [{ initializeApp }, A, F] = await Promise.all([
 const { getAuth, onAuthStateChanged, signOut, createUserWithEmailAndPassword,
         EmailAuthProvider, reauthenticateWithCredential, updatePassword } = A;
 const { getFirestore, initializeFirestore, doc, collection, query, where, getDoc, getDocs, setDoc,
-        updateDoc, deleteDoc, writeBatch, serverTimestamp, runTransaction, Timestamp } = F;
+        updateDoc, deleteDoc, writeBatch, serverTimestamp, runTransaction, Timestamp, orderBy, limit } = F;
 
 /* ---------- Settings you may want to change ---------- */
 // Same value as in index.html. An employee ID "12345" logs in as 12345@wipaudit.local
@@ -50,7 +50,7 @@ export const NAV = [
   { key: 'improvement',   label: 'Improvement',    icon: 'trend',    href: null },
   { key: 'multiskilling', label: 'Multiskilling',  icon: 'users',    href: null },
   { key: 'shift',         label: 'Shift Schedule', icon: 'calendar', href: null },
-  { key: 'audit',         label: 'Audit',          icon: 'clipboard', href: null },
+  { key: 'audit',         label: 'Audit',          icon: 'clipboard', href: 'audit.html' },
   { key: 'inspection',    label: 'Inspection',     icon: 'search',   href: null },
   { key: 'psm',           label: 'PSM',            icon: 'shield',   href: null },
   { key: 'm5',            label: '5M',             icon: 'layers',   href: null },
@@ -1052,3 +1052,34 @@ export async function approveIssue(issue, actor, note, setup) {
   return { ...data, psm: p };
 }
 export const tsFromDate = (d) => Timestamp.fromDate(d);
+
+/* =====================================================================
+   Audit forms (built by the admin) and their responses
+   ===================================================================== */
+export async function listAuditForms() {
+  const s = await getDocs(collection(db, 'auditForms'));
+  return s.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => String(a.title).localeCompare(String(b.title)));
+}
+// id = null creates a new form. Returns the form id.
+export async function saveAuditForm(id, data) {
+  if (id) { await setDoc(doc(db, 'auditForms', id), { ...data, updatedAt: serverTimestamp() }, { merge: true }); return id; }
+  const ref = doc(collection(db, 'auditForms'));
+  await setDoc(ref, { ...data, createdAt: serverTimestamp(), updatedAt: serverTimestamp(), createdBy: auth.currentUser.uid });
+  return ref.id;
+}
+export async function deleteAuditForm(id) { await deleteDoc(doc(db, 'auditForms', id)); }
+// Without formId: the latest `max` responses of all forms. With formId: every response of that form (newest first).
+export async function listAuditResponses({ formId, max = 10 } = {}) {
+  const ms = (r) => r.createdAt?.toMillis?.() ?? 0;
+  if (formId) {
+    const s = await getDocs(query(collection(db, 'auditResponses'), where('formId', '==', formId)));
+    return s.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => ms(b) - ms(a));
+  }
+  const s = await getDocs(query(collection(db, 'auditResponses'), orderBy('createdAt', 'desc'), limit(max)));
+  return s.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => ms(b) - ms(a)).slice(0, max);
+}
+export async function submitAudit(data) {
+  const ref = doc(collection(db, 'auditResponses'));
+  await setDoc(ref, { ...data, auditorUid: auth.currentUser.uid, createdAt: serverTimestamp() });
+  return ref.id;
+}
