@@ -20,16 +20,29 @@ const [{ initializeApp }, A, F] = await Promise.all([
   import(SDK + 'firebase-app.js'), import(SDK + 'firebase-auth.js'), import(SDK + 'firebase-firestore.js')
 ]);
 const { getAuth, onAuthStateChanged, signOut, createUserWithEmailAndPassword,
-        EmailAuthProvider, reauthenticateWithCredential, updatePassword } = A;
+        EmailAuthProvider, reauthenticateWithCredential, updatePassword, sendPasswordResetEmail } = A;
 const { getFirestore, initializeFirestore, doc, collection, query, where, getDoc, getDocs, setDoc,
         updateDoc, deleteDoc, writeBatch, serverTimestamp, runTransaction, Timestamp, orderBy, limit } = F;
 
 /* ---------- Settings you may want to change ---------- */
 // Same value as in index.html. An employee ID "12345" logs in as 12345@wipaudit.local
 export const EMPLOYEE_ID_DOMAIN = 'wipaudit.local';
+// Password reset by email. Leave empty to keep the internal addresses (id@wipaudit.local, which cannot receive mail).
+// Put the administrator's real mailbox here (for example 'name@gmail.com'). New accounts are then created as
+// name+<employeeId>@gmail.com. Every reset link lands in that one mailbox. Same value as in index.html.
+export const RESET_MAILBOX = '';
+// TESTING ONLY. true = every password (first one and later changes) is also saved where only admins can read it,
+// so the admin can use "Temp password" on any user who forgot theirs. Set to false before real launch.
+export const STORE_PASSWORDS_FOR_TESTING = true;
 // Only fill this if the page says it cannot find your Firebase settings:
 const MANUAL_CONFIG = null; // e.g. { apiKey: "...", authDomain: "...", projectId: "...", appId: "..." }
 
+// Pages every signed-in user can open. All other pages can be switched on or off per user (Admin Control, User Database).
+export const PAGE_ALWAYS = ['home', 'about', 'profile'];
+export function hasPage(profile, key) {
+  if (!key || PAGE_ALWAYS.includes(key) || profile?.role === 'admin') return true;
+  return Array.isArray(profile?.pages) ? profile.pages.includes(key) : true;   // no list saved = all pages
+}
 export const DEPARTMENTS = ['All', 'Fabrication', 'Cutting Shop', 'Paint Shop', 'Assembly', 'Quality'];
 
 export const DEFAULT_ADMIN_MESSAGE =
@@ -95,8 +108,17 @@ export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
 
 export const idToEmail = (id) => {
   const v = String(id || '').trim().toLowerCase().replace(/\s+/g, '');
-  return v.includes('@') ? v : `${v}@${EMPLOYEE_ID_DOMAIN}`;
+  if (v.includes('@')) return v;
+  const box = String(RESET_MAILBOX || '').trim().toLowerCase();
+  if (box.includes('@')) { const [l, d] = box.split('@'); return `${l.split('+')[0]}+${v}@${d}`; }
+  return `${v}@${EMPLOYEE_ID_DOMAIN}`;
 };
+export const hasRealMailbox = (email) => !!email && !String(email).toLowerCase().endsWith('@' + EMPLOYEE_ID_DOMAIN);
+// Sends Firebase's reset email to the account's login address and asks the user to choose a new password at next sign-in.
+export async function sendResetLink(uid, email) {
+  await sendPasswordResetEmail(auth, email);
+  try { await updateDoc(doc(db, 'users', uid), { mustChangePassword: true }); } catch { /* not critical */ }
+}
 
 export function friendlyError(e) {
   const c = e?.code || '';
@@ -403,6 +425,8 @@ function explainDbError(e) {
   return e?.message || 'Unknown error.';
 }
 
+export const pageOptions = () => NAV.filter((n) => n.key && !n.adminOnly && !PAGE_ALWAYS.includes(n.key)).map((n) => ({ key: n.key, label: n.label }));
+
 export async function startPage({ active, adminOnly = false, title }) {
   if (initError) {
     return screen({
@@ -455,6 +479,14 @@ export async function startPage({ active, adminOnly = false, title }) {
     });
   }
 
+  if (!hasPage(profile, active)) {
+    return screen({
+      title: 'You do not have access to this page',
+      body: '<p>Your account is not set up to open this page. Ask an administrator to give you access under Admin Control, User Database.</p>',
+      buttons: [{ label: 'Go to Home', kind: 'primary', onClick: () => location.replace('home.html') }, { label: 'Sign out', onClick: logout }]
+    });
+  }
+
   onAuthStateChanged(auth, (u) => { if (!u) location.replace('index.html'); });
 
   const name = profile.name || (user.email || '').split('@')[0] || 'User';
@@ -468,7 +500,7 @@ export async function startPage({ active, adminOnly = false, title }) {
 }
 
 function renderShell(ctx, active, title) {
-  const nav = NAV.filter((n) => !n.adminOnly || ctx.isAdmin).map((n) => n.sep
+  const nav = NAV.filter((n) => (!n.adminOnly || ctx.isAdmin) && (n.sep || hasPage(ctx.profile, n.key))).map((n) => n.sep
     ? '<div class="sep"></div>'
     : `<button type="button" data-k="${n.key}" class="${n.key === active ? 'on' : ''}" ${n.key === active ? 'aria-current="page"' : ''}>${icon(n.icon)}<span>${esc(n.label)}</span></button>`).join('');
   const initials = ctx.name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
@@ -598,6 +630,17 @@ export async function changeMyPassword(current, next) {
   await reauthenticateWithCredential(u, EmailAuthProvider.credential(u.email, current));
   await updatePassword(u, next);
   try { await updateDoc(doc(db, 'users', u.uid), { mustChangePassword: false }); } catch { /* not critical */ }
+  try {
+    if (STORE_PASSWORDS_FOR_TESTING) await setDoc(doc(db, 'tempPasswords', u.uid), { password: next, setAt: serverTimestamp(), setBy: u.uid });
+    else await deleteDoc(doc(db, 'tempPasswords', u.uid));
+  } catch { /* not critical */ }
+}
+// Temporary passwords (testing phase): only admins can read them; deleted as soon as the user sets their own password.
+export async function getTempPassword(uid) {
+  try { const s = await getDoc(doc(db, 'tempPasswords', uid)); return s.exists() ? s.data().password : null; } catch { return null; }
+}
+export async function saveTempPassword(uid, password) {
+  await setDoc(doc(db, 'tempPasswords', uid), { password, setAt: serverTimestamp(), setBy: auth.currentUser.uid });
 }
 
 /* ---------- Database helpers ---------- */
@@ -619,7 +662,7 @@ export async function updateUser(uid, data) {
 
 let secondary = null;
 // Creates the login with a second app instance so the admin stays signed in.
-export async function createUser({ employeeId, name, password, role = 'user', departments = [], userNo = null, mustChangePassword = true, level = 1, reportsTo = '' }) {
+export async function createUser({ employeeId, name, password, role = 'user', departments = [], userNo = null, mustChangePassword = true, level = 1, pages = null, reportsTo = '' }) {
   if (!secondary) secondary = initializeApp(app.options, 'wip-secondary');
   const a2 = getAuth(secondary);
   const email = idToEmail(employeeId);
@@ -628,9 +671,10 @@ export async function createUser({ employeeId, name, password, role = 'user', de
   try { await signOut(a2); } catch { /* ignore */ }
   const profile = {
     name, employeeId: String(employeeId).trim(), email, role, departments,
-    active: true, mustChangePassword, userNo, level: Number(level) || 1, reportsTo: reportsTo || ''
+    active: true, mustChangePassword, userNo, level: Number(level) || 1, pages: Array.isArray(pages) ? pages : null, reportsTo: reportsTo || ''
   };
   await setDoc(doc(db, 'users', uid), { ...profile, createdAt: serverTimestamp(), createdBy: auth.currentUser.uid });
+  if (mustChangePassword || STORE_PASSWORDS_FOR_TESTING) { try { await saveTempPassword(uid, password); } catch { /* not critical */ } }
   return { uid, ...profile };
 }
 

@@ -33,7 +33,7 @@
     getAdminMessage, setAdminMessage, DEFAULT_ADMIN_MESSAGE,
     listInventoryChecks, getInventoryCheck, updateInventoryCheck, deleteInventoryCheck,
     listStationsByDepartment, saveInventoryCheck, deleteInventoryChecksBulk, checkDay,
-    ORG_LEVELS, levelLabel
+    ORG_LEVELS, levelLabel, pageOptions, hasRealMailbox, sendResetLink, RESET_MAILBOX, getTempPassword, STORE_PASSWORDS_FOR_TESTING
   } from './js/wip-core.js';
 
   const ctx = await startPage({ active: 'admin', adminOnly: true, title: 'Admin Control' });
@@ -185,7 +185,7 @@
         <button type="button" class="btn btn-primary" id="uAdd">${icon('plus')}<span>Add user</span></button>
       </div>
       <div class="tbl-wrap"><table class="tbl"><thead><tr>
-        <th>No.</th><th>Employee name</th><th>User ID</th><th>Role</th><th>Level</th><th>Reports to</th><th>Access departments</th><th>Status</th><th></th>
+        <th>No.</th><th>Employee name</th><th>User ID</th><th>Role</th><th>Level</th><th>Reports to</th><th>Access departments</th><th>Page access</th><th>Status</th><th></th>
       </tr></thead><tbody id="ub"></tbody></table></div>
       <div class="note" id="uNote"></div>`;
     const f = () => drawUsers();
@@ -214,15 +214,47 @@
         <td data-label="Level">${esc(levelLabel(u.level))}</td>
         <td data-label="Reports to">${esc(state.users.find((z) => z.uid === u.reportsTo)?.name || '-')}</td>
         <td data-label="Departments">${esc((u.departments || []).join(', '))}</td>
+        <td data-label="Page access">${u.role === 'admin' || !Array.isArray(u.pages) ? 'All pages' : `<span title="${esc(pageOptions().filter((p) => u.pages.includes(p.key)).map((p) => p.label).join(', ') || 'Home only')}">${u.pages.filter((k) => pageOptions().some((p) => p.key === k)).length} of ${pageOptions().length}</span>`}</td>
         <td data-label="Status"><span class="badge ${off ? 'off' : ''}">${off ? 'Inactive' : 'Active'}</span></td>
         <td class="acts-td"><div class="acts">
           <button type="button" class="btn btn-ghost btn-sm" data-e="${esc(u.uid)}">${icon('edit')}<span>Edit</span></button>
+          ${me || (!u.mustChangePassword && !STORE_PASSWORDS_FOR_TESTING) ? '' : `<button type="button" class="btn btn-ghost btn-sm" data-p="${esc(u.uid)}">Temp password</button>`}
+          ${me ? '' : `<button type="button" class="btn btn-ghost btn-sm" data-r="${esc(u.uid)}">Reset password</button>`}
           ${me ? '' : `<button type="button" class="btn btn-sm ${off ? 'btn-ghost' : 'btn-danger'}" data-t="${esc(u.uid)}">${off ? 'Activate' : 'Deactivate'}</button>`}
         </div></td></tr>`;
-    }).join('') || `<tr><td colspan="9"><div class="empty">${state.users.length ? 'No users match these filters.' : 'No users yet. Add one, or import your Excel file.'}</div></td></tr>`;
+    }).join('') || `<tr><td colspan="10"><div class="empty">${state.users.length ? 'No users match these filters.' : 'No users yet. Add one, or import your Excel file.'}</div></td></tr>`;
     panel.querySelector('#uNote').textContent = `Showing ${list.length} of ${state.users.length} users`;
     tb.querySelectorAll('[data-e]').forEach((b) => { b.onclick = () => userDialog(state.users.find((u) => u.uid === b.dataset.e)); });
+    tb.querySelectorAll('[data-p]').forEach((b) => { b.onclick = () => showTemp(state.users.find((u) => u.uid === b.dataset.p)); });
+    tb.querySelectorAll('[data-r]').forEach((b) => { b.onclick = () => resetPassword(state.users.find((u) => u.uid === b.dataset.r)); });
     tb.querySelectorAll('[data-t]').forEach((b) => { b.onclick = () => toggleUser(state.users.find((u) => u.uid === b.dataset.t)); });
+  }
+
+  async function showTemp(u) {
+    const pw = await getTempPassword(u.uid);
+    openModal({
+      title: 'Temporary password',
+      html: pw
+        ? `<p>Current password of ${esc(u.name)} (testing mode):</p><p style="font-size:1.3rem;font-weight:700;letter-spacing:.04em;user-select:all">${esc(pw)}</p><p class="muted">${STORE_PASSWORDS_FOR_TESTING ? 'Testing mode is on, so changed passwords are shown too. Turn it off before launch.' : 'It disappears from here as soon as they set their own password.'}</p>`
+        : `<p>No temporary password is stored for ${esc(u.name)}. It is kept only for accounts created, or passwords changed, after this version was installed. For older accounts, ask the user to change their password once and it will be stored.</p>`,
+      actions: [{ label: 'Close', kind: 'primary', onClick: (x) => x.close() }]
+    });
+  }
+
+  async function resetPassword(u) {
+    if (!hasRealMailbox(u.email)) {
+      openModal({
+        title: 'Reset password by email',
+        html: `<p>${esc(u.name)} signs in with an internal address (<b>${esc(u.email || '-')}</b>) that has no mailbox, so a reset link cannot be delivered.</p>
+          <p>Only accounts created after the reset mailbox is set up in the site files get a login address that reaches your inbox.${RESET_MAILBOX ? '' : ' The reset mailbox is not set up yet.'}</p>`,
+        actions: [{ label: 'Close', kind: 'primary', onClick: (x) => x.close() }]
+      });
+      return;
+    }
+    const ok = await confirmBox({ title: 'Reset password by email', message: `A reset link for ${u.name} (${u.email}) will be emailed to ${u.email}. Open that email, choose a temporary password, and tell ${u.name}. They will be asked to change it after signing in. Their current password stays valid until the link is used.`, okLabel: 'Send reset link' });
+    if (!ok) return;
+    try { await sendResetLink(u.uid, u.email); u.mustChangePassword = true; toast('Reset link sent to ' + u.email + '.'); }
+    catch (e) { toast(friendlyError(e)); }
   }
 
   async function toggleUser(u) {
@@ -251,6 +283,10 @@
         <div class="full"><label class="l">Access departments (tick one or more)</label>
           <div class="deptgrid" id="f_deps">${DEPARTMENTS.map((d) => `<label><input type="checkbox" value="${esc(d)}" ${(u?.departments || []).includes(d) || ((u?.departments || []).includes('All') && d === 'All') ? 'checked' : ''}> ${d === 'All' ? 'All departments' : esc(d)}</label>`).join('')}</div>
           <style>.deptgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px 12px;padding:10px;border:1px solid var(--line);border-radius:10px;max-height:190px;overflow:auto}.deptgrid label{display:flex;gap:6px;align-items:center;font-size:14px}.deptgrid input{width:auto}</style></div>
+        <div class="full"><label class="l">Page access</label>
+          <label class="pgall"><input type="checkbox" id="f_pall" ${!Array.isArray(u?.pages) ? 'checked' : ''}> All pages (new pages are included automatically)</label>
+          <div class="deptgrid" id="f_pages">${pageOptions().map((p) => `<label><input type="checkbox" value="${esc(p.key)}" ${!Array.isArray(u?.pages) || u.pages.includes(p.key) ? 'checked' : ''}> ${esc(p.label)}</label>`).join('')}</div>
+          <div class="hint">Home, About and User Profile are always available. Administrators can open every page.</div><style>.pgall{display:flex;gap:8px;align-items:center;font-weight:600;margin-bottom:8px}.pgall input{width:auto}</style></div>
         <div><label class="l" for="f_lv">Organization level</label><select id="f_lv">${ORG_LEVELS.map((l) => `<option value="${l.n}" ${Number(u?.level || 1) === l.n ? 'selected' : ''}>${esc(l.label)}</option>`).join('')}</select></div>
         <div><label class="l" for="f_rt">Reports to</label><select id="f_rt"></select><div class="hint">Used for issue escalation and approval.</div></div>
       </form><div class="err" id="f_err"></div>`,
@@ -275,6 +311,9 @@
       if (e.target.value === 'All' && e.target.checked) boxes.forEach((b) => { if (b.value !== 'All') b.checked = false; });
       else if (e.target.checked) boxes.find((b) => b.value === 'All').checked = false;
     });
+    const pg = () => [...m.el.querySelectorAll('#f_pages input')];
+    $('f_pall').onchange = () => { pg().forEach((b) => { b.checked = $('f_pall').checked; }); };
+    m.el.querySelector('#f_pages').addEventListener('change', () => { $('f_pall').checked = pg().every((b) => b.checked); });
     $('f_lv').onchange = fillRt; $('f_rt').onchange = () => { chosenRt = $('f_rt').value; }; fillRt();
 
     async function save(x, btn) {
@@ -282,6 +321,8 @@
       const role = $('f_role').value;
       const picked = [...m.el.querySelectorAll('#f_deps input:checked')].map((c) => c.value);
       const departments = picked.includes('All') ? ['All'] : picked;
+      const pagesPicked = [...m.el.querySelectorAll('#f_pages input:checked')].map((c) => c.value);
+      const pages = pagesPicked.length === pageOptions().length ? null : pagesPicked;   // null = all pages
       const err = $('f_err'); err.textContent = '';
       if (!name) { err.textContent = 'Enter the employee name.'; return; }
       const idEditable = !$('f_id').disabled;
@@ -290,14 +331,14 @@
       btn.disabled = true; x.locked = true;
       try {
         if (edit) {
-          const data = { name, departments, level: Number($('f_lv').value) || 1, reportsTo: chosenRt, ...(me ? {} : { role }), ...(idEditable ? { employeeId: id } : {}) };
+          const data = { name, departments, pages, level: Number($('f_lv').value) || 1, reportsTo: chosenRt, ...(me ? {} : { role }), ...(idEditable ? { employeeId: id } : {}) };
           await updateUser(u.uid, data); Object.assign(u, data);
         } else {
           const password = $('f_pw').value;
           if (password.length < 6) { err.textContent = 'The starting password needs at least 6 characters.'; btn.disabled = false; x.locked = false; return; }
           if (state.users.some((z) => String(z.employeeId) === id)) { err.textContent = 'This user ID is already in the list.'; btn.disabled = false; x.locked = false; return; }
           const nextNo = Math.max(0, ...state.users.map((z) => Number(z.userNo) || 0)) + 1;
-          state.users.push(await createUser({ employeeId: id, name, password, role, departments, userNo: nextNo, level: Number($('f_lv').value) || 1, reportsTo: chosenRt }));
+          state.users.push(await createUser({ employeeId: id, name, password, role, departments, pages, userNo: nextNo, level: Number($('f_lv').value) || 1, reportsTo: chosenRt }));
         }
         x.locked = false; x.close(); updateTiles(); drawUsers(); toast(edit ? 'Changes saved.' : 'User added.');
       } catch (e) { err.textContent = friendlyError(e); btn.disabled = false; x.locked = false; }
@@ -307,23 +348,32 @@
   async function downloadUserTemplate() {
     try {
       const X = await loadXLSX();
-      const head = ['User No', 'Employee Name', 'User ID', 'User Password', 'Role', 'Access Department 1', 'Access Department 2', 'Access Department 3', 'Level', 'Reports To (User ID)'];
+      const head = ['User No', 'Employee Name', 'User ID', 'User Password', 'Role', 'Access Department 1', 'Access Department 2', 'Access Department 3', 'Level', 'Reports To (User ID)', 'Page Access'];
       const depts = DEPARTMENTS.filter((d) => d !== 'All');
       const rows = [head,
-        [1, 'Example MD', '10000001', 'ChangeMe@1', 'User', 'All', '', '', 5, ''],
-        [2, 'Example Manager', '10000002', 'ChangeMe@2', 'User', depts[0] || '', depts[1] || '', '', 2, '10000001'],
-        [3, 'Example Engineer', '10000003', 'ChangeMe@3', 'User', depts[0] || '', '', '', 1, '10000002']];
+        [1, 'Example MD', '10000001', 'ChangeMe@1', 'User', 'All', '', '', 5, '', 'All'],
+        [2, 'Example Manager', '10000002', 'ChangeMe@2', 'User', depts[0] || '', depts[1] || '', '', 2, '10000001', 'All'],
+        [3, 'Example Engineer', '10000003', 'ChangeMe@3', 'User', depts[0] || '', '', '', 1, '10000002', 'Inventory, Issue Report, Audit']];
       const info = [['Column', 'What to enter'],
         ['User No', 'Optional serial number'], ['Employee Name', 'Required'], ['User ID', 'Required. Employee ID, no spaces. This is what the user types to sign in'],
         ['User Password', 'Required, at least 6 characters. Used once to create the login and not saved. The user must change it at first sign-in'],
         ['Role', 'Optional. User (default) or Admin'], ['Access Department 1, 2, 3 …', 'At least one. Choose from: All, ' + depts.join(', ') + '. Add more columns (Access Department 4, 5 …) if needed. Several departments can also be written in one cell separated by commas'],
-        ['Level', '1 Engineer, 2 Manager, 3 HOD, 4 GM, 5 MD'], ['Reports To (User ID)', 'Optional. User ID of the person this user reports to. That person can be anywhere in the file or already in the database'],
+        ['Level', '1 Engineer, 2 Manager, 3 HOD, 4 GM, 5 MD'], ['Page Access', 'Optional. Blank or All = every page. Otherwise the pages this user may open, separated by commas: ' + pageOptions().map((p) => p.label).join(', ') + '. Home, About and User Profile are always open'], ['Reports To (User ID)', 'Optional. User ID of the person this user reports to. That person can be anywhere in the file or already in the database'],
         ['Delete the three example rows before you upload.', '']];
       const w1 = X.utils.aoa_to_sheet(rows), w2 = X.utils.aoa_to_sheet(info);
-      w1['!cols'] = [8, 24, 14, 16, 8, 20, 20, 20, 8, 20].map((w) => ({ wch: w })); w2['!cols'] = [30, 110].map((w) => ({ wch: w }));
+      w1['!cols'] = [8, 24, 14, 16, 8, 20, 20, 20, 8, 20, 30].map((w) => ({ wch: w })); w2['!cols'] = [30, 110].map((w) => ({ wch: w }));
       const wb = X.utils.book_new(); X.utils.book_append_sheet(wb, w1, 'Users'); X.utils.book_append_sheet(wb, w2, 'Instructions');
       X.writeFile(wb, 'User_Import_Template.xlsx'); toast('Template downloaded.');
     } catch (e) { toast(e.message || friendlyError(e)); }
+  }
+
+  // Page Access column: blank or "All" = every page; otherwise page names separated by commas (for example: Inventory, Audit)
+  function parsePages(v) {
+    const t = clean(v);
+    if (!t || /^all/i.test(t)) return null;
+    const opts = pageOptions(), keys = new Set();
+    t.split(/[,;\/]/).map((x) => clean(x).toLowerCase()).filter(Boolean).forEach((x) => { const o = opts.find((p) => p.label.toLowerCase() === x || p.key === x); if (o) keys.add(o.key); });
+    return [...keys];
   }
 
   async function importUsers() {
@@ -334,7 +384,7 @@
     const exist = new Set(state.users.map((u) => String(u.employeeId)));
     const rows = parsed.rows.map((r, i) => ({
       userNo: Number(r.userno) || i + 1, name: clean(r.employeename), employeeId: clean(r.userid),
-      level: Math.min(5, Math.max(1, Number(String(r.level ?? r.organizationlevel ?? '').match(/[1-5]/)?.[0]) || 1)), reportsToId: clean(r.reportstouserid ?? r.reportsto ?? r.reportstoid ?? r.superiorid), role: /^admin/i.test(clean(r.role)) ? 'admin' : 'user',
+      level: Math.min(5, Math.max(1, Number(String(r.level ?? r.organizationlevel ?? '').match(/[1-5]/)?.[0]) || 1)), reportsToId: clean(r.reportstouserid ?? r.reportsto ?? r.reportstoid ?? r.superiorid), role: /^admin/i.test(clean(r.role)) ? 'admin' : 'user', pages: parsePages(r.pageaccess ?? r.pages),
       password: String(r.userpassword ?? '').trim(), departments: [...new Set(Object.keys(r).filter((k) => /^(accessdepartment|departments?)\d*$/.test(k)).flatMap((k) => String(r[k] ?? '').split(/[,;\/]/)).map(fixDept).filter(Boolean))]
     })).filter((r) => r.name || r.employeeId);
     rows.forEach((r) => {
@@ -367,7 +417,7 @@
         const r = todo[i];
         txt.textContent = `Creating ${i + 1} of ${todo.length}: ${r.name}`;
         try {
-          state.users.push(await createUser({ employeeId: r.employeeId, name: r.name, password: r.password, departments: r.departments, userNo: r.userNo, level: r.level, role: r.role }));
+          state.users.push(await createUser({ employeeId: r.employeeId, name: r.name, password: r.password, departments: r.departments, userNo: r.userNo, level: r.level, role: r.role, pages: r.pages }));
           ok++;
         } catch (e) { fails.push(`${r.name} (${r.employeeId}): ${friendlyError(e)}`); }
         bar.firstElementChild.style.width = Math.round(((i + 1) / todo.length) * 100) + '%';
