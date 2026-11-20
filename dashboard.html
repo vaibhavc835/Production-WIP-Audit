@@ -27,7 +27,7 @@
   }, 12000);
 </script>
 <script type="module">
-  import { startPage, icon, esc, toast, friendlyError, listInventoryChecks, listIssues, issueMs, issueNo, fmtDur, repeatKey } from './js/wip-core.js';
+  import { startPage, icon, esc, toast, friendlyError, listInventoryChecks, listIssues, listImprovements, sustainPending, sustainDue, impLeadDays, SUSTAIN_KEYS, dayStr, issueMs, issueNo, fmtDur, repeatKey } from './js/wip-core.js';
 
   const ctx = await startPage({ active: 'dashboard', title: 'Dashboard' });
   const main = ctx.main;
@@ -138,6 +138,14 @@
   const g = { month: '', area: '', dept: '', cat: '' };
   const issFiltered = () => issAll.filter((i) => (!g.month || i.month === g.month) && (!g.area || i.area === g.area) && (!g.dept || i.respDept === g.dept) && (!g.cat || i.category === g.cat));
 
+  // Improvement data (a failure here must not break the other sections)
+  let impAll = [], impErr = null;
+  try { impAll = (await listImprovements()).map((i) => ({ ...i, day: i.createdDay || '', month: (i.createdDay || '').slice(0, 7) })).filter((i) => i.day); } catch (e) { impErr = e; }
+  const impMonths = [...new Set(impAll.map((i) => i.month))].sort().reverse();
+  const impUniq = (k) => [...new Set(impAll.map((i) => i[k]).filter(Boolean))].sort();
+  const h = { month: '', dept: '', cat: '' };
+  const impFiltered = () => impAll.filter((i) => (!h.month || i.month === h.month) && (!h.dept || i.dept === h.dept) && (!h.cat || i.category === h.cat));
+
   const monthsAll = [...new Set(all.map((c) => c.month))].sort().reverse();
   const deptsAll = [...new Set(all.map((c) => c.department))].sort();
 
@@ -156,7 +164,7 @@
     { key: 'overall', label: 'Overall', live: true },
     { key: 'inventory', label: 'Inventory', live: true },
     { key: 'issue', label: 'Issue Report', live: true },
-    { key: 'improvement', label: 'Improvement', icon: 'trend' },
+    { key: 'improvement', label: 'Improvement', live: true },
     { key: 'multiskilling', label: 'Multiskilling', icon: 'users' },
     { key: 'shift', label: 'Shift Schedule', icon: 'calendar' },
     { key: 'audit', label: 'Audit', icon: 'clipboard' },
@@ -187,6 +195,12 @@
       <select id="ic" aria-label="Category"><option value="">All categories</option>${issUniq('category').map((d) => `<option>${esc(d)}</option>`).join('')}</select>
       <button type="button" class="btn btn-ghost btn-sm" id="ir">Reset filters</button>
     </div>
+    <div class="filters" id="mfilters" hidden>
+      <select id="hm" aria-label="Month"><option value="">All months</option>${impMonths.map((m) => `<option value="${m}">${monthName(m)}</option>`).join('')}</select>
+      <select id="hd" aria-label="Department"><option value="">All departments</option>${impUniq('dept').map((d) => `<option>${esc(d)}</option>`).join('')}</select>
+      <select id="hc" aria-label="Category"><option value="">All categories</option>${impUniq('category').map((d) => `<option>${esc(d)}</option>`).join('')}</select>
+      <button type="button" class="btn btn-ghost btn-sm" id="hr">Reset filters</button>
+    </div>
     <div id="capture"></div>
     <section class="tools no-cap" id="tools" aria-label="Download and export"></section>`;
   const cap = main.querySelector('#capture');
@@ -201,6 +215,8 @@
   main.querySelector('#fl').onchange = (e) => { f.line = e.target.value; render(); };
   main.querySelector('#fr').onclick = () => { f.month = f.dept = f.line = ''; ['fm', 'fd'].forEach((id) => { main.querySelector('#' + id).value = ''; }); syncLines(); render(); };
   [['im', 'month'], ['ia', 'area'], ['id', 'dept'], ['ic', 'cat']].forEach(([id, k]) => { main.querySelector('#' + id).onchange = (e) => { g[k] = e.target.value; render(); }; });
+  [['hm', 'month'], ['hd', 'dept'], ['hc', 'cat']].forEach(([id, k]) => { main.querySelector('#' + id).onchange = (e) => { h[k] = e.target.value; render(); }; });
+  main.querySelector('#hr').onclick = () => { h.month = h.dept = h.cat = ''; ['hm', 'hd', 'hc'].forEach((id) => { main.querySelector('#' + id).value = ''; }); render(); };
   main.querySelector('#ir').onclick = () => { g.month = g.area = g.dept = g.cat = ''; ['im', 'ia', 'id', 'ic'].forEach((id) => { main.querySelector('#' + id).value = ''; }); render(); };
   main.querySelectorAll('#tabs button').forEach((b) => { b.onclick = () => { location.hash = b.dataset.s; }; });
   window.addEventListener('hashchange', route);
@@ -210,6 +226,7 @@
     main.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.s === section));
     main.querySelector('#filters').hidden = !(section === 'overall' || section === 'inventory');
     main.querySelector('#ifilters').hidden = section !== 'issue';
+    main.querySelector('#mfilters').hidden = section !== 'improvement';
     render();
   }
 
@@ -282,7 +299,7 @@
       ${k('Lines covered', lines, '')}${k('Last check', last ? dayName(last) : '-', '')}</div>`;
   };
 
-  const filterText = () => section === 'issue' ? [g.month ? monthName(g.month) : 'All months', g.area || 'All areas', g.dept || 'All responsibilities', g.cat || 'All categories'].join(' | ') : [f.month ? monthName(f.month) : 'All months', f.dept || 'All departments', f.line || 'All lines'].join(' | ');
+  const filterText = () => section === 'improvement' ? [h.month ? monthName(h.month) : 'All months', h.dept || 'All departments', h.cat || 'All categories'].join(' | ') : section === 'issue' ? [g.month ? monthName(g.month) : 'All months', g.area || 'All areas', g.dept || 'All responsibilities', g.cat || 'All categories'].join(' | ') : [f.month ? monthName(f.month) : 'All months', f.dept || 'All departments', f.line || 'All lines'].join(' | ');
   const capHead = (title) => `<div class="cap-head" data-cap><h2>${esc(title)}</h2><p>${esc(SECTIONS.find((s) => s.key === section).live ? filterText() + ' | ' : '')}Generated ${new Date().toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })} by ${esc(ctx.name)}</p></div>`;
 
   /* ---------- Chart definitions ---------- */
@@ -433,6 +450,41 @@
       ${rows.length ? `<div class="tbl-wrap" style="margin-top:10px"><table class="rt"><thead><tr><th>No.</th><th>Reported</th><th>Area</th><th>Station</th><th>Category</th><th>Responsibility</th><th class="n">Open for</th><th class="n">Level</th></tr></thead><tbody>
       ${rows.map((i) => `<tr><td>${esc(issueNo(i))}</td><td>${dayName(i.day)}</td><td>${esc(i.area || '')}</td><td>${esc(i.station || '')}</td><td>${esc(i.category || '')}</td><td>${esc(i.respDept || '')}</td><td class="n">${esc(fmtDur((Date.now() - i.ms) / 60000))}</td><td class="n">${ilevel(i)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="nodata">No open issue is past its target time.</div>'}</article>`;
   };
+  /* ---------- Improvement section ---------- */
+  const IST = [['completed', 'Completed', C.good], ['approved', 'In progress', C.blue], ['pending', 'Waiting approval', C.orange], ['rejected', 'Rejected', C.bad]];
+  const icnt = (list, keyFn) => { const m = new Map(); list.forEach((i) => { const k = keyFn(i); if (!k) return; const t = m.get(k) || { completed: 0, approved: 0, pending: 0, rejected: 0, n: 0 }; t[i.status] = (t[i.status] || 0) + 1; t.n++; m.set(k, t); }); return m; };
+  const istack = (m, keys, horiz) => IST.map(([k, l, col]) => { const data = keys.map((x) => m.get(x)[k]); return { label: l, table: l, data, ds: barDs(l, data, col, { stacked: true, horiz, thick: horiz ? 20 : 34 }) }; });
+  function renderImprovement(title) {
+    if (impErr) { cap.innerHTML = capHead(title) + `<div class="cc row1" data-cap><div class="nodata"><b>Could not load improvements.</b><br>${esc(friendlyError(impErr))}</div></div>`; return; }
+    const list = impFiltered(), draws = [], add = (c) => { draws.push(c.draw); return c.html; }, pair = (a, b) => `<div class="row2" data-cap>${a}${b}</div>`;
+    let html = capHead(title);
+    if (!list.length) { cap.innerHTML = html + `<div class="cc row1" data-cap><div class="nodata">${impAll.length ? 'No ideas match these filters.' : 'No improvement ideas yet. Charts appear after the first idea.'}</div></div>`; return; }
+    const n = list.length, done = list.filter((i) => i.status === 'completed'), rej = list.filter((i) => i.status === 'rejected').length, today = dayStr();
+    const leads = done.map(impLeadDays).filter((x) => x != null), avg = leads.length ? round1(leads.reduce((a, b) => a + b, 0) / leads.length) : null;
+    const late = done.filter((i) => i.targetDay && i.completedDay > i.targetDay).length + list.filter((i) => i.status === 'approved' && i.targetDay && i.targetDay < today).length;
+    const checks = done.flatMap((i) => SUSTAIN_KEYS.map((k) => i.sustain?.[k]?.result)).filter(Boolean), bad = checks.filter((r) => r === 'Not Effective').length;
+    const due = done.reduce((a, i) => a + sustainPending(i, today).length, 0);
+    const k = (l, v, s) => `<div class="kpi"><span>${l}</span><b>${v}</b>${s ? `<small>${s}</small>` : ''}</div>`;
+    html += `<div class="kpis" data-cap>${k('Ideas', n, '')}${k('Completed', done.length, pct(done.length, n) + '% of ideas')}${k('Average lead time', avg != null ? avg + ' d' : '-', 'Idea date to completion')}${k('Late', late, 'Done or still open after target')}${k('Rejected', rej, '')}${k('Not effective', bad, checks.length ? `of ${checks.length} checks` : 'No checks yet')}${k('Checks due', due, 'Sustainability, not filled')}</div>`;
+    const mm = icnt(list, (i) => i.month), mk = [...mm.keys()].sort().slice(-12);
+    html += pair(add(chartCard({ title: 'Monthly ideas', sub: 'Ideas raised each month, by status', labels: mk.map(monthName), firstCol: 'Month', series: istack(mm, mk), options: baseOpts({ legend: true, stacked: true }) })),
+      (() => { const m = icnt(list, (i) => i.category), keys = [...m.keys()].sort((a, b) => m.get(b).n - m.get(a).n); return add(chartCard({ title: 'Improvement category', sub: 'Safety, quality, delivery, cost and others', labels: keys, firstCol: 'Category', series: istack(m, keys), options: baseOpts({ legend: true, stacked: true }) })); })());
+    const dm = icnt(list, (i) => i.dept), dk = [...dm.keys()].sort((a, b) => dm.get(b).n - dm.get(a).n);
+    html += `<div class="row1" data-cap>${add(chartCard({ title: 'Department-wise ideas', sub: 'Implementation department, by status', labels: dk, firstCol: 'Department', height: Math.max(220, dk.length * 34 + 70), series: istack(dm, dk, true), options: baseOpts({ horiz: true, legend: true, stacked: true }) }))}</div>`;
+    const lm = new Map(); done.forEach((i) => { const d = impLeadDays(i); if (d == null) return; const t = lm.get(i.dept) || [0, 0]; t[0] += d; t[1]++; lm.set(i.dept, t); });
+    const lk = [...lm.keys()].sort((a, b) => lm.get(b)[0] / lm.get(b)[1] - lm.get(a)[0] / lm.get(a)[1]), ld = lk.map((x) => round1(lm.get(x)[0] / lm.get(x)[1]));
+    const src = icnt(list, (i) => i.source), sk = [...src.keys()].sort((a, b) => src.get(b).n - src.get(a).n), sd = sk.map((x) => src.get(x).n);
+    html += pair(add(chartCard({ title: 'Average lead time', sub: 'Days from idea to completion, by department', labels: lk, firstCol: 'Department', suffix: ' d', height: Math.max(200, lk.length * 34 + 50), series: [{ label: 'Days', data: ld, ds: barDs('Days', ld, C.blue, { horiz: true, thick: 20 }) }], options: baseOpts({ horiz: true, labels: ' ' }) })),
+      add(chartCard({ title: 'Source of improvement', sub: 'Where the ideas come from', labels: sk, firstCol: 'Source', height: Math.max(200, sk.length * 34 + 50), series: [{ label: 'Ideas', data: sd, ds: barDs('Ideas', sd, C.blue, { horiz: true, thick: 20 }) }], options: baseOpts({ horiz: true, labels: ' ' }) })));
+    const sl = ['After 1 month', 'After 2 months', 'After 3 months'], eff = SUSTAIN_KEYS.map((x) => done.filter((i) => i.sustain?.[x]?.result === 'Effective').length), ne = SUSTAIN_KEYS.map((x) => done.filter((i) => i.sustain?.[x]?.result === 'Not Effective').length);
+    html += `<div class="row1" data-cap>${add(chartCard({ title: 'Sustainability', sub: 'Result of the 1, 2 and 3 month checks', labels: sl, firstCol: 'Check', series: [{ label: 'Effective', data: eff, ds: barDs('Effective', eff, C.good, { stacked: true }) }, { label: 'Not effective', data: ne, ds: barDs('Not effective', ne, C.bad, { stacked: true }) }], options: baseOpts({ legend: true, stacked: true }) }))}</div>`;
+    const dueRows = done.flatMap((i) => sustainPending(i, today).map((x) => ({ i, k: x }))).sort((a, b) => sustainDue(a.i, a.k).localeCompare(sustainDue(b.i, b.k))).slice(0, 15);
+    const nes = done.flatMap((i) => SUSTAIN_KEYS.filter((x) => i.sustain?.[x]?.result === 'Not Effective').map((x) => ({ i, k: x })));
+    html += `<article class="cc row1" data-cap><div class="cc-h"><div><h3>Sustainability checks due</h3><p class="sub">Oldest first</p></div></div>${dueRows.length ? `<div class="tv"><table><thead><tr><th>Idea</th><th>Department</th><th>Station</th><th>Check</th><th>Due date</th></tr></thead><tbody>${dueRows.map((r) => `<tr><td>${esc(r.i.no)}</td><td>${esc(r.i.dept)}</td><td>${esc(r.i.station)}</td><td>After ${SUSTAIN_KEYS.indexOf(r.k) + 1} month</td><td>${dayName(sustainDue(r.i, r.k))}</td></tr>`).join('')}</tbody></table></div>` : '<div class="nodata">No checks are due.</div>'}</article>`;
+    html += `<article class="cc row1" data-cap><div class="cc-h"><div><h3>Ideas found not effective</h3><p class="sub">With the remark from the check</p></div></div>${nes.length ? `<div class="tv"><table><thead><tr><th>Idea</th><th>Department</th><th>Station</th><th>Check</th><th>Remark</th></tr></thead><tbody>${nes.map((r) => `<tr><td>${esc(r.i.no)}</td><td>${esc(r.i.dept)}</td><td>${esc(r.i.station)}</td><td>After ${SUSTAIN_KEYS.indexOf(r.k) + 1} month</td><td>${esc(r.i.sustain[r.k].remark || '')}</td></tr>`).join('')}</tbody></table></div>` : '<div class="nodata">None.</div>'}</article>`;
+    cap.innerHTML = html; wire(draws);
+  }
+
   function renderIssue(title) {
     if (issErr) { cap.innerHTML = capHead(title) + `<div class="cc row1" data-cap><div class="nodata"><b>Could not load issues.</b><br>${esc(friendlyError(issErr))}</div></div>`; return; }
     const list = issFiltered(), draws = [], add = (c) => { draws.push(c.draw); return c.html; }, pair = (a, b) => `<div class="row2" data-cap>${a}${b}</div>`;
@@ -466,6 +518,7 @@
       return;
     }
     if (section === 'issue') { renderIssue(title); return; }
+    if (section === 'improvement') { renderImprovement(title); return; }
     const list = filtered(), rows = flat(list), draws = [];
     const add = (c) => { draws.push(c.draw); return c.html; };
     const pair = (a, b) => `<div class="row2" data-cap>${a}${b}</div>`;

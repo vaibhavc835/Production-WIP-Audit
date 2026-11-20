@@ -60,7 +60,7 @@ export const NAV = [
   { key: 'about',         label: 'About',          icon: 'info',     modal: 'about' },
   { key: 'inventory',     label: 'Inventory',      icon: 'box',      href: 'inventory.html' },
   { key: 'issue',         label: 'Issue Report',   icon: 'alert',    href: 'issues.html' },
-  { key: 'improvement',   label: 'Improvement',    icon: 'trend',    href: null },
+  { key: 'improvement',   label: 'Improvement',    icon: 'trend',    href: 'improvement.html' },
   { key: 'multiskilling', label: 'Multiskilling',  icon: 'users',    href: null },
   { key: 'shift',         label: 'Shift Schedule', icon: 'calendar', href: null },
   { key: 'audit',         label: 'Audit',          icon: 'clipboard', href: 'audit.html' },
@@ -1127,3 +1127,82 @@ export async function submitAudit(data) {
   await setDoc(ref, { ...data, auditorUid: auth.currentUser.uid, createdAt: serverTimestamp() });
   return ref.id;
 }
+
+/* =====================================================================
+   Improvement (ideas): raise, approve (Level 2 manager), complete, sustainability checks
+   ===================================================================== */
+// Idea number = line code + serial, for example FB001. Codes come from Annexure A and can be changed by the admin.
+export const DEFAULT_IMP_SETUP = {
+  lines: [
+    ['Fabrication', 'Boom Line', 'FB'], ['Fabrication', 'Arm Line', 'FA'], ['Fabrication', 'Upper Line', 'FU'], ['Fabrication', 'Lower Line', 'FL'],
+    ['Fabrication', 'Cutting Shop', 'FC'], ['Fabrication', 'Paint Shop', 'FP'],
+    ['Assembly', 'Upper Assy', 'AU'], ['Assembly', 'Lower Assy', 'AL'], ['Assembly', 'Main Line', 'AM'], ['Assembly', 'FDI Line', 'AF'], ['Assembly', 'MEX Line', 'MEx'],
+    ['Mfg. & Maintenance', 'Mfg. & Maint.', 'MM'],
+    ['PPIC', 'Assy Store', 'WS'], ['PPIC', 'Warehouse - 1', 'W1'], ['PPIC', 'Warehouse - 2', 'W2'], ['PPIC', 'Warehouse - 3', 'W3'],
+    ['PPIC', 'Testing', 'QT'], ['PPIC', 'Rebuilt Center', 'RC'],
+    ['Quality', 'Quality', 'QT'], ['After Service', 'After Service', 'RC'],
+    ['HD Hyundai', 'HD Hyundai', 'HD'], ['Other than Field Team', 'Other than Field Team', 'OO']
+  ].map(([dept, line, code]) => ({ dept, line, code })),
+  stations: [],                                   // { dept, line, name }
+  sources: ['3G walk', 'Suggestion', 'SIP', 'Breakdown Analysis', 'Module Name'],
+  categories: ['Safety', 'Quality', 'Delivery', 'Cost', 'Productivity'],
+  supports: ['PE', 'TD', 'Prod', 'Maintenance', 'Other'],
+  notifyUids: []                                  // users who get every idea together with the Level 2 manager (used when a manager is not set)
+};
+export const IMP_PRIORITIES = ['High', 'Medium', 'Low'];
+export async function getImprovementSetup() {
+  let d = {};
+  try { const s = await getDoc(doc(db, 'config', 'improvementSetup')); d = s.exists() ? s.data() : {}; } catch { /* use defaults */ }
+  const arr = (k) => (Array.isArray(d[k]) && d[k].length ? d[k] : DEFAULT_IMP_SETUP[k]);
+  return { lines: arr('lines'), stations: Array.isArray(d.stations) ? d.stations : [], sources: arr('sources'), categories: arr('categories'), supports: arr('supports'),
+    notifyUids: Array.isArray(d.notifyUids) ? d.notifyUids : [] };
+}
+export async function saveImprovementSetup(data) { await setDoc(doc(db, 'config', 'improvementSetup'), { ...data, updatedAt: serverTimestamp() }, { merge: true }); }
+
+export async function listImprovements() {
+  const s = await getDocs(collection(db, 'improvements'));
+  return s.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (b.createdMs || 0) - (a.createdMs || 0));
+}
+export async function createImprovement(data, code) {
+  const ref = doc(collection(db, 'improvements')), cref = doc(db, 'impCounters', code);
+  let serial = 0;
+  await runTransaction(db, async (tx) => {
+    const c = await tx.get(cref);
+    serial = (c.exists() ? Number(c.data().n) || 0 : 0) + 1;
+    tx.set(cref, { n: serial });
+    tx.set(ref, { ...data, code, serial, no: code + String(serial).padStart(3, '0'), createdAt: serverTimestamp(), createdMs: Date.now() });
+  });
+  return { id: ref.id, no: code + String(serial).padStart(3, '0') };
+}
+export async function updateImprovement(id, data) { await updateDoc(doc(db, 'improvements', id), { ...data, updatedAt: serverTimestamp() }); }
+
+export const SUSTAIN_KEYS = ['m1', 'm2', 'm3'];
+export const dayStr = (d = new Date()) => dayKeyOf(d);
+export const parseDay = (s) => { const [y, m, d] = String(s || '').split('-').map(Number); return y ? new Date(y, m - 1, d) : null; };
+export function addMonths(s, n) {
+  const d = parseDay(s); if (!d) return null;
+  const day = d.getDate(); d.setDate(1); d.setMonth(d.getMonth() + n);
+  const last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate(); d.setDate(Math.min(day, last));
+  return dayKeyOf(d);
+}
+export const daysBetween = (a, b) => { const x = parseDay(a), y = parseDay(b); return x && y ? Math.round((y - x) / 86400000) : null; };
+export const sustainDue = (i, k) => addMonths(i.completedDay, SUSTAIN_KEYS.indexOf(k) + 1);
+// Checks that are due today or earlier and not yet filled in
+export function sustainPending(i, today = dayStr()) {
+  if (i.status !== 'completed' || !i.completedDay) return [];
+  return SUSTAIN_KEYS.filter((k) => !i.sustain?.[k]?.result && sustainDue(i, k) <= today);
+}
+// What this user has to do with the idea. admin is not listed as a role unless they are one of the approvers.
+export function impRole(i, uid, today = dayStr(), now = Date.now()) {
+  const ap = (i.approverUids || []).includes(uid);
+  if (i.status === 'pending' && ap) return { role: 'approve' };
+  if (i.status === 'approved' && i.respUid === uid) return { role: 'complete' };
+  if (i.status === 'completed') {
+    const due = sustainPending(i, today).filter((k) => (i.sustain?.[k]?.assignUid ? i.sustain[k].assignUid === uid : ap));
+    if (due.length) return { role: 'sustain', keys: due };
+  }
+  if (i.status === 'rejected' && i.byUid === uid && now - (i.approvedMs || 0) < 7 * 86400000) return { role: 'rejected' };
+  return { role: null };
+}
+// Lead time: days from the idea date to the completion date
+export const impLeadDays = (i) => (i.completedDay ? daysBetween(i.createdDay, i.completedDay) : null);

@@ -90,6 +90,7 @@
       <button type="button" class="tile" data-t="inventory"><span class="ico">${icon('db')}</span><span><b>Station Database</b><small id="cInv">Loading</small></span></button>
       <button type="button" class="tile" data-t="history"><span class="ico">${icon('clipboard')}</span><span><b>Inventory History</b><small id="cHist">View / Add past checks</small></span></button>
       <button type="button" class="tile" data-t="issuesetup"><span class="ico">${icon('alert')}</span><span><b>Issue Setup</b><small>Masters, lead time, fields</small></span></button>
+      <button type="button" class="tile" data-t="improvementsetup"><span class="ico">${icon('trend')}</span><span><b>Improvement Setup</b><small>Lines, codes, stations, users</small></span></button>
       <button type="button" class="tile" data-t="auditforms"><span class="ico">${icon('clipboard')}</span><span><b>Audit Forms</b><small>Create audit checklists</small></span></button>
       <button type="button" class="tile" data-t="message"><span class="ico">${icon('msg')}</span><span><b>Admin Message</b><small>Shown on Home</small></span></button>
     </div>
@@ -106,9 +107,9 @@
   main.querySelectorAll('#tabs .tile').forEach((t) => { t.onclick = () => { location.hash = t.dataset.t; }; });
   const route = () => {
     const h = location.hash.replace('#', '');
-    state.tab = ['users', 'inventory', 'history', 'issuesetup', 'auditforms', 'message'].includes(h) ? h : 'users';
+    state.tab = ['users', 'inventory', 'history', 'issuesetup', 'improvementsetup', 'auditforms', 'message'].includes(h) ? h : 'users';
     updateTiles();
-    ({ users: renderUsers, inventory: renderInventory, history: renderHistory, issuesetup: renderIssueSetupTab, auditforms: renderAuditTab, message: renderMessage })[state.tab]();
+    ({ users: renderUsers, inventory: renderInventory, history: renderHistory, issuesetup: renderIssueSetupTab, improvementsetup: renderImpSetupTab, auditforms: renderAuditTab, message: renderMessage })[state.tab]();
   };
   window.addEventListener('hashchange', route);
 
@@ -1325,6 +1326,15 @@
       const m = await import('./js/issue-setup.js');
       if (state.tab !== 'issuesetup') return;
       await m.renderIssueSetup(panel, ctx);
+    } catch (e) { panel.innerHTML = errorBox(e); }
+  }
+
+  async function renderImpSetupTab() {
+    panel.innerHTML = '<div class="empty">Loading improvement setup…</div>';
+    try {
+      const m = await import('./js/improvement-setup.js');
+      if (state.tab !== 'improvementsetup') return;
+      await m.renderImprovementSetup(panel, ctx);
     } catch (e) { panel.innerHTML = errorBox(e); }
   }
 

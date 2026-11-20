@@ -28,9 +28,10 @@
 </script>
 <script type="module">
   import {
-    startPage, NAV, go, icon, esc, toast, openModal, openProfile,
+    startPage, NAV, go, hasPage, icon, esc, toast, openModal, openProfile,
     startNetwork, getAdminMessage, DEFAULT_ADMIN_MESSAGE,
-    listIssues, issueRole, issueNo, fmtDur, levelLabel, issueMs
+    listIssues, issueRole, issueNo, fmtDur, levelLabel, issueMs,
+    listImprovements, impRole, dayStr, SUSTAIN_KEYS, sustainDue, parseDay
   } from './js/wip-core.js';
 
   const ctx = await startPage({ active: 'home', title: 'Home' });
@@ -38,7 +39,7 @@
 
   // Tiles, in the order of the design sheet (3 x 3)
   const TILE_KEYS = ['inventory', 'issue', 'improvement', 'multiskilling', 'shift', 'audit', 'inspection', 'psm', 'm5'];
-  const tiles = TILE_KEYS.map((k) => NAV.find((n) => n.key === k));
+  const tiles = TILE_KEYS.map((k) => NAV.find((n) => n.key === k)).filter((t) => t && hasPage(ctx.profile, t.key));
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
@@ -60,6 +61,7 @@
     </section>
 
     <section id="issueStrip" hidden></section>
+    <section id="impStrip" hidden></section>
 
     ${ctx.profile.mustChangePassword ? `
     <div class="alert" id="pwBanner">
@@ -126,6 +128,35 @@
         ${rows.length > 6 ? `<div style="font-size:12.5px;color:#64748b;padding-top:6px">and ${rows.length - 6} more</div>` : ''}`;
       box.hidden = false;
     } catch { /* the strip is optional: Home works without it */ }
+  })();
+
+  // Improvement ideas for you: approve, complete, sustainability checks due, and rejected ideas of yours
+  (async () => {
+    const box = main.querySelector('#impStrip');
+    if (!hasPage(ctx.profile, 'improvement')) return;
+    try {
+      const t = dayStr(), now = Date.now();
+      const rows = (await listImprovements()).map((i) => ({ i, r: impRole(i, ctx.uid, t, now) })).filter((x) => x.r.role);
+      if (!rows.length) return;
+      const rank = { approve: 0, complete: 1, sustain: 2, rejected: 3 };
+      rows.sort((a, b) => rank[a.r.role] - rank[b.r.role] || (a.i.createdMs || 0) - (b.i.createdMs || 0));
+      const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'], fd = (s) => { const d = parseDay(s); return d ? `${d.getDate()} ${MON[d.getMonth()]} ${d.getFullYear()}` : ''; };
+      const tag = (x) => {
+        if (x.r.role === 'approve') return ['Approve idea', 'a'];
+        if (x.r.role === 'complete') { const late = x.i.targetDay && x.i.targetDay < t; return ['Complete by ' + fd(x.i.targetDay) + (late ? ' (overdue)' : ''), late ? 'l' : '']; }
+        if (x.r.role === 'sustain') { const k = x.r.keys[0], over = sustainDue(x.i, k) < t; return [`Sustainability check: after ${SUSTAIN_KEYS.indexOf(k) + 1} month, due ${fd(sustainDue(x.i, k))}`, over ? 'l' : 'a']; }
+        return ['Rejected by ' + (x.i.approvedByName || 'approver') + (x.i.approvalNote ? ': ' + x.i.approvalNote : ''), 'l'];
+      };
+      box.innerHTML = `<style>#impStrip{margin-top:16px;background:#fff;border:1px solid #bfdbfe;border-left:5px solid #2563eb;border-radius:12px;padding:12px 14px}
+        #impStrip h2{font-size:15px;margin:0 0 8px;display:flex;justify-content:space-between;gap:8px;align-items:center}
+        #impStrip a.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:7px 0;border-top:1px solid #f1f5f9;color:inherit;text-decoration:none;font-size:13.5px}
+        #impStrip .p{padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600;background:#dbeafe;color:#1e40af}
+        #impStrip .p.l{background:#fee2e2;color:#991b1b}#impStrip .p.a{background:#fef3c7;color:#92400e}</style>
+        <h2><span>Improvement ideas for you (${rows.length})</span><a href="improvement.html" style="font-size:13px">Open Improvement</a></h2>
+        ${rows.slice(0, 6).map((x) => { const [txt, cls] = tag(x); return `<a class="row" href="improvement.html#id=${encodeURIComponent(x.i.id)}"><b>${esc(x.i.no)}</b><span>${esc(x.i.station || '')} · ${esc(x.i.line || '')}</span><span style="flex:1;min-width:120px;color:#52514e">${esc((x.i.plan || '').slice(0, 70))}</span><span class="p ${cls}">${esc(txt)}</span></a>`; }).join('')}
+        ${rows.length > 6 ? `<div style="font-size:12.5px;color:#64748b;padding-top:6px">and ${rows.length - 6} more</div>` : ''}`;
+      box.hidden = false;
+    } catch { /* optional */ }
   })();
 
   startNetwork(main.querySelector('.band canvas'));

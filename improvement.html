@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0b1220">
+  <title>Improvement | Production WIP Audit</title>
+  <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+  <link rel="modulepreload" href="js/wip-core.js">
+  <link rel="modulepreload" href="js/firebase-config.js">
+  <style>
+    html,body{margin:0;background:#0b1220}
+    #boot{position:fixed;inset:0;display:grid;place-items:center;text-align:center;background:linear-gradient(135deg,#0b1220,#12304f);color:#cbd5e1;font:15px 'Segoe UI',system-ui,sans-serif}
+    #boot i{display:block;width:34px;height:34px;margin:0 auto 14px;border-radius:50%;border:3px solid rgba(255,255,255,.2);border-top-color:#4ade80;animation:bootspin .8s linear infinite}
+    #boot p{margin-top:10px;max-width:300px;font-size:13.5px;color:#94a3b8}
+    @keyframes bootspin{to{transform:rotate(360deg)}}
+    @media (prefers-reduced-motion:reduce){#boot i{animation:none}}
+  </style>
+</head>
+<body>
+<div id="boot" role="status"><div><i></i>Loading Production WIP Audit…</div></div>
+<script>
+  setTimeout(function () {
+    var b = document.getElementById('boot');
+    if (b) b.firstElementChild.insertAdjacentHTML('beforeend', '<p>This is taking longer than usual. Check your internet connection, then reload the page.</p>');
+  }, 12000);
+</script>
+<script type="module">
+  import {
+    startPage, esc, toast, openModal, friendlyError, listUsers, tierUser,
+    getImprovementSetup, listImprovements, createImprovement, updateImprovement,
+    IMP_PRIORITIES, SUSTAIN_KEYS, dayStr, addMonths, daysBetween, sustainDue, sustainPending, impRole, impLeadDays, parseDay
+  } from './js/wip-core.js';
+
+  const ctx = await startPage({ active: 'improvement', title: 'Improvement' });
+  const main = ctx.main;
+
+  const st = document.createElement('style');
+  st.textContent = `
+  .imp [hidden]{display:none!important}
+  .imp .tabs{display:flex;gap:6px;margin:14px 0 10px;flex-wrap:wrap}
+  .imp .tab{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 16px;font-weight:600;cursor:pointer;font-size:14px}
+  .imp .tab.on{background:var(--navy);color:#fff;border-color:var(--navy)}
+  .imp .flt{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:end}
+  .imp .flt>div{min-width:130px;flex:1}.imp .flt .s{flex:2;min-width:180px}
+  .imp .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600;background:#f1f5f9;color:#334155;white-space:nowrap}
+  .imp .pill.blue{background:#dbeafe;color:#1e40af}.imp .pill.amber{background:#fef3c7;color:#92400e}.imp .pill.red{background:#fee2e2;color:#991b1b}
+  .imp .pill.green{background:#dcfce7;color:#166534}.imp .pill.grey{background:#e2e8f0;color:#334155}
+  .imp tr.row{cursor:pointer}.imp td small{display:block;color:var(--muted)}
+  .imp .cnt{font-weight:700;color:var(--muted);font-size:13px;margin:4px 0 8px}
+  .iph{border:1px solid var(--line);border-radius:10px;margin:0 0 12px;overflow:hidden;background:#fff}
+  .iph>h4{margin:0;padding:8px 12px;background:#f1f5f9;font-size:13.5px;display:flex;justify-content:space-between;gap:8px}
+  .iph .g{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px 16px;padding:10px 12px}
+  .iph .g b{display:block;font-size:12px;color:var(--muted);font-weight:600}
+  .iph .g .w{grid-column:1/-1}.iph .g div{white-space:pre-wrap;word-break:break-word;font-size:14px}
+  .iph .f{padding:12px;display:grid;gap:10px}
+  .iph .f .r2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .iph .note{background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 10px;font-size:13.5px;color:#78350f}
+  .iph .opts{display:flex;gap:8px;flex-wrap:wrap}
+  .iph .opts label{display:flex;gap:6px;align-items:center;border:1px solid var(--line);border-radius:999px;padding:7px 14px;cursor:pointer;font-weight:600;font-size:14px}
+  .iph .err{color:#b91c1c;font-size:13px}
+  @media (max-width:640px){.iph .f .r2{grid-template-columns:1fr}}
+  `;
+  document.head.appendChild(st);
+
+  /* ---------- helpers ---------- */
+  const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const fd = (s) => { const d = typeof s === 'string' ? parseDay(s) : s; return d ? `${String(d.getDate()).padStart(2, '0')}-${MON[d.getMonth()]}-${d.getFullYear()}` : ''; };
+  const clean = (v) => String(v ?? '').replace(/[ \t]+/g, ' ').trim();
+  const today = () => dayStr();
+  const isAdmin = ctx.isAdmin;
+  const STATUS = { pending: ['Waiting for approval', 'amber'], rejected: ['Rejected', 'red'], approved: ['In progress', 'blue'], completed: ['Completed', 'green'] };
+  const sdone = (i) => SUSTAIN_KEYS.filter((k) => i.sustain?.[k]?.result).length;
+  const opt = (arr, sel, ph) => (ph ? `<option value="">${esc(ph)}</option>` : '') + arr.map((x) => `<option${x === sel ? ' selected' : ''}>${esc(x)}</option>`).join('');
+
+  main.innerHTML = '<div class="imp" id="imp"><div class="empty">Loading…</div></div>';
+  const root = main.querySelector('#imp');
+
+  let users = [], setup = null, ideas = [], view = 'me';
+  const F = { q: '', status: '', dept: '', cat: '', from: '', to: '' };
+  async function loadAll() {
+    [users, setup, ideas] = await Promise.all([listUsers(), getImprovementSetup(), listImprovements()]);
+  }
+  try { await loadAll(); } catch (e) { root.innerHTML = `<div class="empty"><b>Could not load the improvement ideas.</b><p>${esc(friendlyError(e))}</p></div>`; throw e; }
+  const uname = (uid) => users.find((u) => u.uid === uid)?.name || '';
+  const canAct = (i) => ({ role: impRole(i, ctx.uid, today()).role, admin: isAdmin });
+
+  /* ---------- list ---------- */
+  function nextStep(i) {
+    if (i.status === 'pending') return `Approval: ${esc(i.approverNames || 'Admin')}`;
+    if (i.status === 'approved') { const late = i.targetDay && i.targetDay < today(); return `Completion: ${esc(i.respName || '')}<small${late ? ' style="color:#b91c1c"' : ''}>Target ${esc(fd(i.targetDay))}${late ? ' (overdue)' : ''}</small>`; }
+    if (i.status === 'completed') {
+      const p = sustainPending(i);
+      if (p.length) return `<span class="pill red">Sustainability check due</span>`;
+      const k = SUSTAIN_KEYS.find((x) => !i.sustain?.[x]?.result);
+      return k ? `Next check ${esc(fd(sustainDue(i, k)))}` : 'All checks done';
+    }
+    return '';
+  }
+  function filtered(everyone = false) {
+    const q = F.q.toLowerCase();
+    return ideas.filter((i) => (everyone || view === 'all' || impRole(i, ctx.uid, today()).role)
+      && (!F.status || i.status === F.status) && (!F.dept || i.dept === F.dept) && (!F.cat || i.category === F.cat)
+      && (!F.from || (i.createdDay || '') >= F.from) && (!F.to || (i.createdDay || '') <= F.to)
+      && (!q || [i.no, i.byName, i.dept, i.line, i.station, i.issueDetails, i.plan, i.teamName].join(' ').toLowerCase().includes(q)));
+  }
+  function showList() {
+    const depts = [...new Set(setup.lines.map((l) => l.dept))];
+    root.innerHTML = `<div class="page-head"><div><h1>Improvement</h1><p class="sub">Suggest an improvement, get it approved, complete it and check it stays effective.</p></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="btn btn-ghost" id="exp">Export to Excel</button><button type="button" class="btn btn-primary" id="new">New idea</button></div></div>
+      <div class="tabs"><button type="button" class="tab ${view === 'me' ? 'on' : ''}" data-v="me">For me</button><button type="button" class="tab ${view === 'all' ? 'on' : ''}" data-v="all">All ideas</button></div>
+      <div class="flt"><div class="s"><label class="l" for="fq">Search</label><input id="fq" value="${esc(F.q)}" placeholder="Idea no., name, station, text"></div>
+        <div><label class="l" for="fs">Status</label><select id="fs"><option value="">All</option>${Object.entries(STATUS).map(([k, v]) => `<option value="${k}"${F.status === k ? ' selected' : ''}>${v[0]}</option>`).join('')}</select></div>
+        <div><label class="l" for="fdp">Department</label><select id="fdp">${opt(depts, F.dept, 'All')}</select></div>
+        <div><label class="l" for="fc">Category</label><select id="fc">${opt(setup.categories, F.cat, 'All')}</select></div>
+        <div><label class="l" for="ff">From</label><input type="date" id="ff" value="${F.from}"></div><div><label class="l" for="ft">To</label><input type="date" id="ft" value="${F.to}"></div></div>
+      <div id="lst"></div>`;
+    root.querySelectorAll('.tab').forEach((b) => { b.onclick = () => { view = b.dataset.v; showList(); }; });
+    root.querySelector('#new').onclick = newIdea;
+    root.querySelector('#exp').onclick = exportExcel;
+    const map = { fq: 'q', fs: 'status', fdp: 'dept', fc: 'cat', ff: 'from', ft: 'to' };
+    Object.entries(map).forEach(([id, k]) => { const el = root.querySelector('#' + id); el.oninput = el.onchange = () => { F[k] = el.value; drawRows(); }; });
+    drawRows();
+  }
+  function drawRows() {
+    const rows = filtered(), box = root.querySelector('#lst');
+    if (!rows.length) { box.innerHTML = `<div class="empty">${view === 'me' ? '<b>Nothing waiting for you.</b><p>Use “All ideas” to see every idea, or choose New idea.</p>' : 'No ideas match.'}</div>`; return; }
+    box.innerHTML = `<div class="cnt">${rows.length} idea${rows.length === 1 ? '' : 's'}</div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Idea no.</th><th>Date</th><th>Idea by</th><th>Department / line / station</th><th>Category</th><th>Status</th><th>Next step</th><th class="num">Lead time</th></tr></thead><tbody>
+      ${rows.map((i) => { const s = STATUS[i.status] || ['', 'grey'], ld = impLeadDays(i), role = impRole(i, ctx.uid, today()).role;
+        return `<tr class="row" data-id="${esc(i.id)}"><td data-label="Idea no."><b>${esc(i.no)}</b></td><td data-label="Date">${esc(fd(i.createdDay))}</td><td data-label="Idea by">${esc(i.byName)}${i.teamName ? `<small>Team: ${esc(i.teamName)}</small>` : ''}</td>
+        <td data-label="Where">${esc(i.dept)}<small>${esc(i.line)} · ${esc(i.station)}</small></td><td data-label="Category">${esc(i.category)}</td>
+        <td data-label="Status"><span class="pill ${s[1]}">${s[0]}</span>${i.status === 'completed' ? `<small>Checks ${sdone(i)} of 3</small>` : ''}${role ? '<small style="color:#1d4ed8;font-weight:600">Action for you</small>' : ''}</td>
+        <td data-label="Next step">${nextStep(i)}</td><td class="num" data-label="Lead time">${ld != null ? ld + ' d' : ''}</td></tr>`; }).join('')}</tbody></table></div>`;
+    box.querySelectorAll('tr.row').forEach((tr) => { tr.onclick = () => detail(ideas.find((x) => x.id === tr.dataset.id)); });
+  }
+
+  /* ---------- new idea ---------- */
+  function newIdea() {
+    const depts = [...new Set(setup.lines.map((l) => l.dept))], O = '__other__';
+    const m = openModal({
+      title: 'New improvement idea', wide: true,
+      html: `<div class="iph" style="border:0"><div class="f">
+        <div class="note">Idea date and your name are filled in automatically. The idea number is created from the line you choose.</div>
+        <div class="r2"><div><label class="l" for="n_dept">Implementation department *</label><select id="n_dept">${opt(depts, '', 'Choose')}</select></div>
+          <div><label class="l" for="n_line">Implementation line *</label><select id="n_line"><option value="">Choose the department first</option></select></div></div>
+        <div class="r2"><div><label class="l" for="n_st">Implementation station *</label><select id="n_st"><option value="">Choose the line first</option></select><input id="n_st_o" placeholder="Type the station" maxlength="80" style="margin-top:6px" hidden></div>
+          <div><label class="l" for="n_team">Team name (if available)</label><input id="n_team" maxlength="80"></div></div>
+        <div><label class="l" for="n_iss">Issue details (Flow, 5S, PSM, material problems) *</label><textarea id="n_iss" rows="3" maxlength="800"></textarea></div>
+        <div><label class="l" for="n_plan">Improvement plan *</label><textarea id="n_plan" rows="3" maxlength="800"></textarea></div>
+        <div class="r2"><div><label class="l" for="n_src">Source of improvement *</label><select id="n_src">${opt(setup.sources, '', 'Choose')}</select></div>
+          <div><label class="l" for="n_cat">Improvement category *</label><select id="n_cat">${opt(setup.categories, '', 'Choose')}</select></div></div>
+        <div><span class="l">Improvement will be done by *</span><div class="opts"><label><input type="radio" name="n_by" value="Self"> Self</label><label><input type="radio" name="n_by" value="Team"> Team</label></div></div>
+        <div><label class="l" for="n_ben">Benefit of improvement *</label><textarea id="n_ben" rows="2" maxlength="500"></textarea></div>
+        <div class="note" id="n_photo">Before photo: after you submit, save it in the common folder with the name <b>IdeaNo-B</b>. The exact name is shown once the idea number is created.</div>
+        <div class="err" id="n_err" hidden></div></div></div>`,
+      actions: [{ label: 'Cancel', onClick: (x) => x.close() }, { label: 'Submit idea', kind: 'primary', id: 'go', onClick: submit }],
+      onOpen: (x) => {
+        const $ = (id) => x.body.querySelector('#' + id);
+        $('n_dept').onchange = () => { const ls = setup.lines.filter((l) => l.dept === $('n_dept').value); $('n_line').innerHTML = opt(ls.map((l) => l.line), '', 'Choose'); $('n_line').onchange(); };
+        $('n_line').onchange = () => {
+          const sts = setup.stations.filter((s) => s.dept === $('n_dept').value && s.line === $('n_line').value).map((s) => s.name);
+          $('n_st').innerHTML = opt(sts, '', 'Choose') + `<option value="${O}">Other (type below)</option>`; $('n_st').onchange();
+        };
+        $('n_st').onchange = () => { $('n_st_o').hidden = $('n_st').value !== O; };
+      }
+    });
+    async function submit(x, btn) {
+      const $ = (id) => x.body.querySelector('#' + id), err = $('n_err'); err.hidden = true;
+      const dept = $('n_dept').value, line = $('n_line').value, station = $('n_st').value === O ? clean($('n_st_o').value) : $('n_st').value;
+      const v = { issueDetails: clean($('n_iss').value), plan: clean($('n_plan').value), source: $('n_src').value, category: $('n_cat').value, benefit: clean($('n_ben').value) };
+      const doneBy = x.body.querySelector('input[name="n_by"]:checked')?.value;
+      const miss = !dept ? 'department' : !line ? 'line' : !station ? 'station' : !v.issueDetails ? 'issue details' : !v.plan ? 'improvement plan' : !v.source ? 'source of improvement' : !v.category ? 'category' : !doneBy ? 'who will do the improvement' : !v.benefit ? 'benefit' : '';
+      if (miss) { err.textContent = 'Please fill in: ' + miss + '.'; err.hidden = false; return; }
+      const code = setup.lines.find((l) => l.dept === dept && l.line === line)?.code;
+      if (!code) { err.textContent = 'This line has no code yet. Ask the administrator to add it in Improvement Setup.'; err.hidden = false; return; }
+      // Level 2 manager of the person, plus the users chosen by the admin; they all get the idea
+      const l2 = tierUser(users, ctx.uid, 2);
+      const approvers = [...new Set([l2?.uid, ...(setup.notifyUids || [])].filter((u) => u && u !== ctx.uid))];
+      btn.disabled = true;
+      try {
+        const r = await createImprovement({
+          dept, line, station, teamName: clean($('n_team').value), ...v, doneBy, status: 'pending', createdDay: today(),
+          byUid: ctx.uid, byName: ctx.name, byEmployeeId: ctx.employeeId || '',
+          approverUids: approvers, approverNames: approvers.map(uname).filter(Boolean).join(', '), sustain: {}
+        }, code);
+        x.close(); await loadAll(); showList();
+        openModal({ title: 'Idea submitted', html: `<p>Your idea number is <b style="font-size:1.3rem">${esc(r.no)}</b>.</p><div class="iph"><div class="f"><div class="note">Save the before photo in the common folder with the name <b>${esc(r.no)}-B</b>.</div></div></div>${approvers.length ? '' : '<p class="hint">No Level 2 manager is set for you, so the administrator will see this idea.</p>'}`, actions: [{ label: 'Close', kind: 'primary', onClick: (y) => y.close() }] });
+      } catch (e) { err.textContent = friendlyError(e); err.hidden = false; btn.disabled = false; }
+    }
+  }
+
+  /* ---------- detail and actions ---------- */
+  const grid = (items) => `<div class="g">${items.filter(Boolean).map(([k, v, w]) => `<div class="${w ? 'w' : ''}"><b>${esc(k)}</b>${esc(v || '-')}</div>`).join('')}</div>`;
+  function sections(i) {
+    const s = STATUS[i.status] || ['', ''], ld = impLeadDays(i);
+    let h = `<div class="iph"><h4><span>Phase 1: Idea</span><span>${esc(i.no)} · ${esc(s[0])}</span></h4>${grid([
+      ['Idea date', fd(i.createdDay)], ['Idea by', i.byName + (i.byEmployeeId ? ' (' + i.byEmployeeId + ')' : '')], ['Team name', i.teamName], ['Department', i.dept], ['Line', i.line], ['Station', i.station],
+      ['Issue details', i.issueDetails, 1], ['Improvement plan', i.plan, 1], ['Source', i.source], ['Done by', i.doneBy], ['Category', i.category], ['Benefit', i.benefit, 1], ['Before photo file name', i.no + '-B']])}</div>`;
+    if (i.status !== 'pending') h += `<div class="iph"><h4><span>Phase 2: Approval</span><span>${i.status === 'rejected' ? 'Rejected' : 'Accepted'}</span></h4>${grid([
+      ['Decision', i.status === 'rejected' ? 'Rejected' : 'Accepted'], ['Approved by', i.approvedByName], ['Approval date', fd(i.approvedDay)], ['Note', i.approvalNote, 1],
+      ...(i.status !== 'rejected' ? [['Completion department', i.respDept], ['Completion user', i.respName], ['Target completion date', fd(i.targetDay)], ['Support required', i.support], ['Priority', i.priority]] : [])])}</div>`;
+    if (i.status === 'completed') h += `<div class="iph"><h4><span>Phase 3: Completion</span><span>Lead time ${ld ?? '-'} days</span></h4>${grid([
+      ['Improvement action', i.actionTaken, 1], ['Completed by', i.completedByName], ['Completion date', fd(i.completedDay)], ['Lead time', ld != null ? ld + ' days' : ''], ['Note (if delayed)', i.delayNote],
+      ['Horizontal deployment', i.horizontal], ['Horizontal deployment area', i.horizontalArea], ['After photo file name', i.no + '-A']])}</div>
+      <div class="iph"><h4><span>Sustainability</span><span>${sdone(i)} of 3 checked</span></h4>${grid(SUSTAIN_KEYS.map((k, n) => { const c = i.sustain?.[k]; return [`After ${n + 1} month${n ? 's' : ''} (due ${fd(sustainDue(i, k))})`, c?.result ? `${c.result}${c.remark ? ' — ' + c.remark : ''} (${c.byName}, ${fd(c.day)})` : (c?.assignName ? 'Assigned to ' + c.assignName : 'Not checked yet'), 1]; }))}</div>`;
+    return h;
+  }
+  function detail(i) {
+    if (!i) return;
+    const { role } = impRole(i, ctx.uid, today()), adm = isAdmin;
+    const acts = [];
+    let form = '';
+    if (i.status === 'pending' && (role === 'approve' || adm)) { form = approveForm(i); acts.push({ label: 'Save decision', kind: 'primary', id: 'save', onClick: (x, b) => doApprove(i, x, b) }); }
+    else if (i.status === 'approved' && (role === 'complete' || adm)) { form = completeForm(i); acts.push({ label: 'Mark completed', kind: 'primary', id: 'save', onClick: (x, b) => doComplete(i, x, b) }); }
+    else if (i.status === 'completed') {
+      const ap = (i.approverUids || []).includes(ctx.uid) || adm;
+      const keys = SUSTAIN_KEYS.filter((k) => !i.sustain?.[k]?.result && (adm || (i.sustain?.[k]?.assignUid ? i.sustain[k].assignUid === ctx.uid : ap)) && sustainDue(i, k) <= today());
+      const canAssign = SUSTAIN_KEYS.filter((k) => !i.sustain?.[k]?.result && ap);
+      if (keys.length || canAssign.length) { form = sustainForm(i, keys, canAssign); acts.push({ label: 'Save', kind: 'primary', id: 'save', onClick: (x, b) => doSustain(i, x, b, keys) }); }
+    }
+    if (i.status === 'rejected' && i.byUid === ctx.uid) form = `<div class="iph"><div class="f"><div class="note">Your idea was rejected${i.approvedByName ? ' by ' + esc(i.approvedByName) : ''}.${i.approvalNote ? ' Reason: ' + esc(i.approvalNote) : ''}</div></div></div>`;
+    openModal({ title: `${i.no} · ${i.dept}`, wide: true, html: sections(i) + form, actions: [{ label: 'Close', onClick: (x) => x.close() }, ...acts] });
+  }
+  const finish = async (x, msg) => { x.close(); toast(msg); await loadAll(); showList(); };
+
+  // Phase 2: approval and assignment of the completion owner
+  function approveForm(i) {
+    const depts = [...new Set(setup.lines.map((l) => l.dept))];
+    return `<div class="iph"><h4><span>Your decision</span></h4><div class="f" id="af">
+      <div class="opts"><label><input type="radio" name="dec" value="ok"> Accept</label><label><input type="radio" name="dec" value="no"> Reject</label></div>
+      <div id="acc" hidden><div class="r2"><div><label class="l" for="a_dept">Completion responsibility department *</label><select id="a_dept">${opt(depts, i.dept, 'Choose')}</select></div>
+        <div><label class="l" for="a_user">Completion responsibility user *</label><select id="a_user"></select></div></div>
+        <div class="r2" style="margin-top:10px"><div><label class="l" for="a_tgt">Target completion date *</label><input type="date" id="a_tgt" min="${today()}"></div>
+        <div><label class="l" for="a_sup">Support required</label><select id="a_sup">${opt(setup.supports, '', 'None')}</select></div></div>
+        <div style="margin-top:10px;max-width:260px"><label class="l" for="a_pri">Priority *</label><select id="a_pri">${opt(IMP_PRIORITIES, 'Medium', '')}</select></div></div>
+      <div><label class="l" for="a_note">Note <span id="a_rq"></span></label><textarea id="a_note" rows="2" maxlength="500"></textarea></div><div class="err" id="a_err" hidden></div></div></div>`;
+  }
+  const usersOf = (dept) => { const a = users.filter((u) => u.active !== false && (u.departments || []).includes(dept)); return a.length ? a : users.filter((u) => u.active !== false); };
+  document.addEventListener('change', (e) => {
+    const t = e.target;
+    if (t.name === 'dec') { const d = document.querySelector('#acc'); if (d) d.hidden = t.value !== 'ok'; const r = document.querySelector('#a_rq'); if (r) r.innerHTML = t.value === 'no' ? '<b style="color:#dc2626">(required)</b>' : ''; fillUsers(); }
+    if (t.id === 'a_dept') fillUsers();
+    if (t.name === 'hd') { const a = document.querySelector('#c_area_w'); if (a) a.hidden = t.value !== 'Yes'; }
+  });
+  function fillUsers() {
+    const sel = document.querySelector('#a_user'), dep = document.querySelector('#a_dept'); if (!sel || !dep) return;
+    sel.innerHTML = `<option value="">Choose</option>` + usersOf(dep.value).map((u) => `<option value="${esc(u.uid)}">${esc(u.name)}${u.employeeId ? ' (' + esc(u.employeeId) + ')' : ''}</option>`).join('');
+  }
+  async function doApprove(i, x, btn) {
+    const $ = (id) => x.body.querySelector('#' + id), err = $('a_err'); err.hidden = true;
+    const dec = x.body.querySelector('input[name="dec"]:checked')?.value, note = clean($('a_note').value);
+    if (!dec) { err.textContent = 'Choose Accept or Reject.'; err.hidden = false; return; }
+    const base = { approvedByUid: ctx.uid, approvedByName: ctx.name, approvedDay: today(), approvedMs: Date.now(), approvalNote: note };
+    let data;
+    if (dec === 'no') { if (!note) { err.textContent = 'Write the reason for rejecting.'; err.hidden = false; return; } data = { ...base, status: 'rejected' }; }
+    else {
+      const dept = $('a_dept').value, uid = $('a_user').value, tgt = $('a_tgt').value;
+      if (!dept || !uid || !tgt) { err.textContent = 'Choose the completion department, the user and the target date.'; err.hidden = false; return; }
+      if (tgt < i.createdDay) { err.textContent = 'The target date cannot be before the idea date.'; err.hidden = false; return; }
+      data = { ...base, status: 'approved', respDept: dept, respUid: uid, respName: uname(uid), targetDay: tgt, support: $('a_sup').value, priority: $('a_pri').value };
+    }
+    btn.disabled = true;
+    try { await updateImprovement(i.id, data); await finish(x, dec === 'no' ? 'Idea rejected.' : 'Idea accepted and assigned.'); }
+    catch (e) { err.textContent = friendlyError(e); err.hidden = false; btn.disabled = false; }
+  }
+
+  // Phase 3: completion
+  function completeForm(i) {
+    return `<div class="iph"><h4><span>Complete this idea</span></h4><div class="f">
+      <div><label class="l" for="c_act">Improvement action *</label><textarea id="c_act" rows="3" maxlength="800"></textarea></div>
+      <div class="r2"><div><label class="l" for="c_day">Completion date *</label><input type="date" id="c_day" value="${today()}" min="${i.createdDay}" max="${today()}"></div>
+        <div><label class="l" for="c_note">Note (required if later than the target date ${esc(fd(i.targetDay))})</label><input id="c_note" maxlength="300"></div></div>
+      <div><span class="l">Horizontal deployment and best practice *</span><div class="opts"><label><input type="radio" name="hd" value="Yes"> Yes</label><label><input type="radio" name="hd" value="No"> No</label></div></div>
+      <div id="c_area_w" hidden><label class="l" for="c_area">Horizontal deployment area</label><input id="c_area" maxlength="200"></div>
+      <div class="note">After photo: save it in the common folder with the name <b>${esc(i.no)}-A</b>.</div><div class="err" id="c_err" hidden></div></div></div>`;
+  }
+  async function doComplete(i, x, btn) {
+    const $ = (id) => x.body.querySelector('#' + id), err = $('c_err'); err.hidden = true;
+    const act = clean($('c_act').value), day = $('c_day').value, note = clean($('c_note').value), hd = x.body.querySelector('input[name="hd"]:checked')?.value;
+    const late = day > i.targetDay;
+    const miss = !act ? 'Write the improvement action.' : !day ? 'Choose the completion date.' : day < i.createdDay ? 'The completion date cannot be before the idea date.' : day > today() ? 'The completion date cannot be in the future.' : late && !note ? 'The work finished after the target date. Write the reason in Note.' : !hd ? 'Choose Yes or No for horizontal deployment.' : '';
+    if (miss) { err.textContent = miss; err.hidden = false; return; }
+    btn.disabled = true;
+    try {
+      await updateImprovement(i.id, { status: 'completed', actionTaken: act, completedDay: day, completedMs: Date.now(), completedByUid: ctx.uid, completedByName: ctx.name, delayNote: note,
+        horizontal: hd, horizontalArea: hd === 'Yes' ? clean($('c_area').value) : '' });
+      await finish(x, 'Idea completed.');
+    } catch (e) { err.textContent = friendlyError(e); err.hidden = false; btn.disabled = false; }
+  }
+
+  // Phase 4 to 6: sustainability checks after 1, 2 and 3 months
+  function sustainForm(i, keys, canAssign) {
+    const lbl = (k) => `After ${SUSTAIN_KEYS.indexOf(k) + 1} month${k === 'm1' ? '' : 's'}`;
+    const lvl1 = users.filter((u) => u.active !== false);
+    return `<div class="iph"><h4><span>Sustainability</span></h4><div class="f">
+      ${keys.length ? `<div class="r2"><div><label class="l" for="s_k">Check</label><select id="s_k">${keys.map((k) => `<option value="${k}">${lbl(k)}</option>`).join('')}</select></div>
+        <div><span class="l">Result</span><div class="opts"><label><input type="radio" name="sr" value="Effective"> Effective</label><label><input type="radio" name="sr" value="Not Effective"> Not effective</label></div></div></div>
+        <div><label class="l" for="s_rm">Remark (required if not effective)</label><input id="s_rm" maxlength="300"></div>` : '<p class="hint">No check is due yet. You can already assign a person for an upcoming check.</p>'}
+      ${canAssign.length ? `<div class="r2"><div><label class="l" for="s_ak">Or assign a person to check</label><select id="s_ak">${canAssign.map((k) => `<option value="${k}">${lbl(k)}</option>`).join('')}</select></div>
+        <div><label class="l" for="s_au">Person</label><select id="s_au"><option value="">Choose</option>${lvl1.map((u) => `<option value="${esc(u.uid)}">${esc(u.name)}</option>`).join('')}</select></div></div>` : ''}
+      <div class="err" id="s_err" hidden></div></div></div>`;
+  }
+  async function doSustain(i, x, btn, keys) {
+    const $ = (id) => x.body.querySelector('#' + id), err = $('s_err'); err.hidden = true;
+    const res = x.body.querySelector('input[name="sr"]:checked')?.value, au = $('s_au')?.value;
+    const sustain = { ...(i.sustain || {}) };
+    let assignUids = i.assignUids || [];
+    if (res) {
+      const k = $('s_k').value, rm = clean($('s_rm').value);
+      if (res === 'Not Effective' && !rm) { err.textContent = 'Write a remark: the improvement is not effective.'; err.hidden = false; return; }
+      sustain[k] = { ...(sustain[k] || {}), result: res, remark: rm, byUid: ctx.uid, byName: ctx.name, day: today() };
+    } else if (au) {
+      const k = $('s_ak').value; sustain[k] = { ...(sustain[k] || {}), assignUid: au, assignName: uname(au) };
+      assignUids = [...new Set([...assignUids, au])];
+    } else { err.textContent = 'Choose a result, or choose a person to assign.'; err.hidden = false; return; }
+    btn.disabled = true;
+    try { await updateImprovement(i.id, { sustain, assignUids }); await finish(x, res ? 'Check saved.' : 'Person assigned.'); }
+    catch (e) { err.textContent = friendlyError(e); err.hidden = false; btn.disabled = false; }
+  }
+
+  /* ---------- export (same columns as the Improvement sheet) ---------- */
+  let xlsxP;
+  const loadXLSX = () => xlsxP || (xlsxP = new Promise((res, rej) => {
+    if (window.XLSX) return res(window.XLSX);
+    const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    s.onload = () => res(window.XLSX); s.onerror = () => { xlsxP = null; rej(new Error('Could not load the Excel writer. Check your internet connection.')); };
+    document.head.appendChild(s);
+  }));
+  async function exportExcel() {
+    const rows = filtered(true).slice().sort((a, b) => (a.createdMs || 0) - (b.createdMs || 0));
+    if (!rows.length) { toast('There are no ideas to export.'); return; }
+    try {
+      const X = await loadXLSX();
+      const head = ['Idea No.', 'Improvement suggestion date', 'Improvement suggestion by', 'Team Name (If available)', 'Implementation Dept.', 'Implementation Line', 'Implementation Station',
+        'Issue Details (Flow, 5S, PSM, Material Problems)', 'Improvement Plan', 'Source of Improvement (3G walk, sugg, SIP, Module Name)', 'Improvement will be done by (Self, Team)', 'Improvement Category (SQDC)', 'Benefit of Improvement', 'Before Photos (file name)',
+        'Approval by Level 2 manager', 'Approved By', 'Approval Date', 'Completion responsibility Department', 'Completion responsibility user', 'Target completion date', 'Support Required', 'Priority',
+        'After Improvement Photos (file name)', 'Improvement Action', 'Completion Status', 'Completed By', 'Completion Date', 'Lead time (days)', 'Note (If Delay)', 'Horizontal Deployment & Best Practice', 'Horizontal deployment area',
+        'Sustainability After 1 month', 'Sustainability After 2 month', 'Sustainability After 3 month', 'Remark if not effective'];
+      const status = (i) => ({ pending: 'Waiting for approval', rejected: 'Rejected', approved: 'In progress', completed: 'Completed' }[i.status] || '');
+      const body = rows.map((i) => {
+        const c = (k) => i.sustain?.[k]?.result || '';
+        const rem = SUSTAIN_KEYS.map((k, n) => i.sustain?.[k]?.remark ? `After ${n + 1} month: ${i.sustain[k].remark}` : '').filter(Boolean).join('; ');
+        return [i.no, fd(i.createdDay), i.byName, i.teamName || '', i.dept, i.line, i.station, i.issueDetails, i.plan, i.source, i.doneBy, i.category, i.benefit, i.no + '-B',
+          i.status === 'pending' ? 'Pending' : i.status === 'rejected' ? 'Rejected' : 'Accepted', i.approvedByName || '', fd(i.approvedDay), i.respDept || '', i.respName || '', fd(i.targetDay), i.support || '', i.priority || '',
+          i.status === 'completed' ? i.no + '-A' : '', i.actionTaken || '', i.status === 'completed' ? 'Completed' : status(i), i.completedByName || '', fd(i.completedDay), impLeadDays(i) ?? '', i.delayNote || '',
+          i.horizontal || '', i.horizontalArea || '', c('m1'), c('m2'), c('m3'), rem];
+      });
+      const phases = [['Phase 1 - Initiation of Idea (Any User)', 0, 13], ['Phase 2 - Approval of Idea (Level 2 manager of user)', 14, 16], ['Phase 3 - Completion of Idea (Responsible Dept user)', 17, 30], ['Sustainability checks (after 1, 2 and 3 months)', 31, 34]];
+      const top = Array(head.length).fill(''); phases.forEach(([t, a]) => { top[a] = t; });
+      const ws = X.utils.aoa_to_sheet([top, head, ...body]);
+      ws['!merges'] = phases.map(([, a, b]) => ({ s: { r: 0, c: a }, e: { r: 0, c: b } }));
+      ws['!cols'] = head.map((h, n) => ({ wch: [7, 8, 9, 12, 13, 16].includes(n) ? 20 : n === 0 ? 10 : 16 }));
+      ws['!freeze'] = { xSplit: 1, ySplit: 2 };
+      const wb = X.utils.book_new(); X.utils.book_append_sheet(wb, ws, 'Improvement');
+      X.writeFile(wb, `Improvement_${today()}.xlsx`);
+      toast('Export completed.');
+    } catch (e) { toast(friendlyError(e)); }
+  }
+
+  showList();
+  // Open the idea mentioned in the link (from the Home strip)
+  const hid = location.hash.match(/^#id=(.+)$/); if (hid) { const i = ideas.find((x) => x.id === decodeURIComponent(hid[1])); if (i) detail(i); }
+</script>
+</body>
+</html>
