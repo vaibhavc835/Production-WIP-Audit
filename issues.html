@@ -30,12 +30,12 @@
   import {
     startPage, icon, esc, toast, openModal, confirmBox, friendlyError,
     listUsers, listColl, getIssueSetup, listIssues, listIssuesAtStation, createIssue, submitContainment, returnIssue, approveIssue, signoffIssue, updateIssue,
-    buildRoute, issueRole, currentLevel, issueMs, issueNo, repeatKey, fmtDur, levelLabel, dayKeyOf, weekMonthOf, DEFAULT_LEAD
+    buildRoute, repeatInfo, lvOf, issueRole, currentLevel, issueMs, issueNo, repeatKey, fmtDur, levelLabel, dayKeyOf, weekMonthOf, DEFAULT_LEAD
   } from './js/wip-core.js';
 
   const ctx = await startPage({ active: 'issue', title: 'Issue Report' });
   const main = ctx.main;
-  const me = { uid: ctx.uid, name: ctx.name, employeeId: ctx.employeeId, level: Number(ctx.profile.level) || 1 };
+  const me = { uid: ctx.uid, name: ctx.name, employeeId: ctx.employeeId, level: lvOf(ctx.profile.level) };
 
   const st = document.createElement('style');
   st.textContent = `
@@ -65,6 +65,8 @@
   .iss .kv dt{color:var(--muted)}.iss .kv dd{margin:0;word-break:break-word}
   .iss .route{background:#f8fafc;border:1px dashed var(--line);border-radius:10px;padding:10px 12px;font-size:13.5px;margin-top:12px}
   .iss .route .warn{color:#b45309;font-weight:600}
+  .rep{border-radius:10px;padding:9px 12px;font-size:13.5px;margin:10px 0}.rep.bad{background:#fee2e2;color:#7f1d1d}.rep.ok{background:#dcfce7;color:#14532d}
+  .est{background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:10px 12px;font-size:13.5px;margin:10px 0}.est b{font-size:15px}
   .iss .psmrow td small{color:var(--muted)}
   @media (max-width:640px){.iss .kv{grid-template-columns:1fr}.iss .kv dt{margin-top:6px}}
   `;
@@ -81,7 +83,7 @@
 
   async function loadAll() {
     const [setup, users, resps, leads, stations, issues] = await Promise.all([getIssueSetup(), listUsers(), listColl('issueResp'), listColl('issueLead'), listColl('issueStations'), listIssues()]);
-    Object.assign(D, { setup, users: users.map((u) => ({ ...u, level: Number(u.level) || 1 })), resps, leads, stations, issues });
+    Object.assign(D, { setup, users: users.map((u) => ({ ...u, level: lvOf(u.level) })), resps, leads, stations, issues });
   }
   async function reloadIssues() { D.issues = await listIssues(); }
 
@@ -108,6 +110,18 @@
     return left >= 0 ? `${fmtDur(left)} left` : `Overdue by ${fmtDur(left)}`;
   }
 
+  /* ---------- live repeat count and running loss ---------- */
+  const RPT = () => D.setup.psm?.windowDays || 90;
+  const repeatOf = (i, list = D.issues) => repeatInfo(i, list, RPT());
+  const repeatHtml = (n) => n.repeated
+    ? `<div class="rep bad"><b>Repeated issue.</b> This is occurrence ${n.total} at this station and category: ${n.others} other in the last ${esc(n.windowDays)} days${n.loss ? `, ${esc(n.loss)} hours lost earlier` : ''}${n.last ? `, last on ${esc(fmtDT(n.last))}` : ''}.</div>`
+    : `<div class="rep ok"><b>First time</b> at this station and category in the last ${esc(n.windowDays)} days.</div>`;
+  const runLoss = (i, mp, mc, now = Date.now()) => {
+    const h = Math.max(0, (now - issueMs(i)) / 3600000), hrs = (Number(mp) || 0) * ((Number(mc) || 0) > 0 ? Number(mc) : 1) * h;
+    return { dt: h, hours: Math.round(hrs * 100) / 100, cost: Math.round(hrs * (Number(D.setup.rate) || 0)) };
+  };
+  const inr = (n) => Number(n || 0).toLocaleString('en-IN');
+
   /* ---------- tab: my tasks ---------- */
   function card(i, role, now) {
     const cls = role.role === 'approve' ? 'appr' : role.overdue ? 'late' : role.role === 'action' ? 'act' : role.role === 'escalated' ? 'esc' : '';
@@ -116,7 +130,7 @@
     return `<button type="button" class="ic ${cls}" data-id="${esc(i.id)}"><div class="itop"><b>${esc(issueNo(i))}</b><span>${esc(fmtDT(issueMs(i)))}</span></div>
       <div class="where">${esc(i.station || '-')} <span style="font-weight:500;color:var(--muted)">· ${esc(i.line || '')}</span></div>
       <div class="desc">${esc(i.description || '')}</div>
-      <div class="ifoot"><span class="pill">${esc(i.category || '')}</span><span class="pill">${esc(i.respDept || '')}</span><span class="pill ${role.role === 'approve' ? 'amber' : role.role === 'escalated' ? 'violet' : 'blue'}">${esc(tag)}</span>${t ? `<span class="pill ${t.startsWith('Overdue') ? 'red' : 'green'}">${esc(t)}</span>` : ''}</div></button>`;
+      <div class="ifoot">${['action', 'approve', 'cosign', 'escalated', 'info'].includes(role.role) && repeatOf(i).repeated ? `<span class="pill red">Repeated ×${repeatOf(i).total}</span>` : ''}<span class="pill">${esc(i.category || '')}</span><span class="pill">${esc(i.respDept || '')}</span><span class="pill ${role.role === 'approve' ? 'amber' : role.role === 'escalated' ? 'violet' : 'blue'}">${esc(tag)}</span>${t ? `<span class="pill ${t.startsWith('Overdue') ? 'red' : 'green'}">${esc(t)}</span>` : ''}</div></button>`;
   }
   function myBuckets() {
     const now = Date.now(), b = { action: [], approve: [], cosign: [], escalated: [], info: [], waiting: [], mine: [] };
@@ -170,18 +184,21 @@
     const showRoute = () => {
       const r = $('route'), dep = val('respDept'), cat = val('category');
       if (!dep || !cat) { r.innerHTML = '<span class="hint">Choose the responsible department and category to see who will get this issue.</span>'; return null; }
-      const route = buildRoute({ users: D.users, resps: D.resps, leads: D.leads, respDept: dep, category: cat, initiatorUid: me.uid });
+      const route = buildRoute({ users: D.users, resps: D.resps, leads: D.leads, respDept: dep, category: cat, initiatorUid: me.uid, chosenUid: view.querySelector('#f_pickUser')?.value || '' });
       const names = (a) => a.map(uName).filter(Boolean).join(', ');
       const esc2 = ['l2', 'l3', 'l4', 'l5'].map((k, n) => route.tiers[k] ? `${levelLabel(n + 2)}: <b>${esc(uName(route.tiers[k]))}</b>` : '').filter(Boolean);
+      const pickSel = route.canPick ? `<div style="margin:6px 0"><label class="l" for="f_pickUser">Responsible user *</label><select id="f_pickUser">${route.pickUids.map((u) => `<option value="${esc(u)}" ${u === route.primaryUid ? 'selected' : ''}>${esc(uName(u))}</option>`).join('')}</select></div>` : '';
+      const apName = route.approverUid && route.approverUid !== me.uid ? uName(route.approverUid) : '';
       r.innerHTML = route.responsibleUids.length
-        ? `<div>Responsible: <b>${esc(names(route.responsibleUids))}</b>. Target ${esc(fmtDur(route.lead.target))} to add a containment action.</div>
+        ? `${pickSel}<div>Responsible: <b>${esc(route.canPick ? uName(route.primaryUid) : names(route.responsibleUids))}</b>. Target ${esc(fmtDur(route.lead.target))} to add a containment action.</div>
            <div class="hint">${esc2.join(' · ') || 'No managers set above the responsible user.'}</div>
-           <div class="hint">Approval by <b>you</b> (the initiator).${optText(route)}</div>`
+           <div class="hint">Approval by ${apName ? `<b>${esc(apName)}</b> (your superior)` : '<b>you</b> (the initiator)'}.${optText(route)}</div>`
         : '<div class="warn">No responsible user is set for this department and category. Ask an administrator to add one in Issue Setup, Responsibility.</div>';
       return route;
     };
     ['area', 'line'].forEach((k) => { $('f_' + k)?.addEventListener('change', k === 'area' ? refreshLine : refreshStation); });
     ['respDept', 'category'].forEach((k) => $('f_' + k)?.addEventListener('change', showRoute));
+    $('route').addEventListener('change', (e) => { if (e.target.id === 'f_pickUser') { const keep = e.target.value; showRoute(); const el = $('f_pickUser'); if (el) el.value = keep; } });
     $('rsub').onclick = async (ev) => {
       const btn = ev.currentTarget, err = $('rerr'); err.textContent = '';
       const d = {};
@@ -201,7 +218,7 @@
           ...d, status: 'open', repeat,
           initiatorUid: me.uid, reportedByName: me.name, initiatorEmployeeId: me.employeeId,
           responsibleUids: route.responsibleUids, primaryUid: route.primaryUid, responsibleName: uName(route.primaryUid),
-          tiers: route.tiers, lead: route.lead, approverUid: me.uid, optTiers: route.optTiers,
+          tiers: route.tiers, lead: route.lead, approverUid: route.approverUid || me.uid, optTiers: route.optTiers,
           reportedMs: now.getTime(), dateKey: dayKeyOf(now), weekMonth: weekMonthOf(now)
         };
         const out = await createIssue(rec);
@@ -221,20 +238,24 @@
     const row = (k, v) => (v === undefined || v === null || v === '' ? '' : `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`);
     const L = (k) => LABELS[k] || k;
     const route = [['Level 2', i.tiers?.l2], ['Level 3', i.tiers?.l3], ['Level 4', i.tiers?.l4], ['Level 5', i.tiers?.l5]].filter(([, u]) => u).map(([l, u]) => `${l}: ${uName(u) || '?'}`).join(' · ');
-    const body = `<dl class="kv">
+    const seeRep = ['action', 'approve', 'cosign', 'escalated', 'info'].includes(r.role) || ctx.isAdmin;
+    const live = i.status === 'open' && (r.role === 'action' || ctx.isAdmin) ? runLoss(i, i.mp, i.mc) : null;
+    const body = `${seeRep ? `<div id="repbox">${repeatHtml(repeatOf(i))}</div>` : ''}${live ? `<div class="est" id="liveBox">Downtime so far: <b>${esc(fmtDur(live.dt * 60))}</b> since the issue was reported (${esc(fmtDT(issueMs(i)))}).</div>` : ''}<dl class="kv">
       ${row('Issue no.', issueNo(i))}${row('Status', i.status === 'open' ? 'Open' : i.status === 'pending' ? 'Waiting for approval' : 'Closed')}${row('Reported', fmtDT(issueMs(i)))}${row('Week', i.weekMonth)}
       ${row(L('area'), i.area)}${row(L('line'), i.line)}${row(L('station'), i.station)}${row(L('nature'), i.nature)}${row(L('model'), i.model)}${row(L('partNumber'), i.partNumber)}
       ${row(L('description'), i.description)}${row(L('category'), i.category)}${row(L('respDept'), i.respDept)}${row('Repeat', i.repeat)}
       ${row('Reported by', i.reportedByName)}${row('Responsible', i.responsibleName || (i.responsibleUids || []).map(uName).join(', '))}${row('Escalation path', route)}${row('Approver (initiator)', uName(i.approverUid) || i.reportedByName)}${row('Optional sign-off by', (i.optApprovalUids || []).map(uName).join(', '))}${row('Signed off', (i.signoffs || []).map((x) => `${x.name}${x.note ? ': ' + x.note : ''}`).join('; '))}${row('Target', i.lead ? fmtDur(i.lead.target) : '')}
       ${row(L('containment'), i.containment)}${row('Containment by', i.containmentBy?.name)}${row('Containment time', fmtDT(tsMs(i.containmentAt)).replace(/^-$/, ''))}${row('Delay', i.delayMin != null ? fmtDur(i.delayMin) + (i.leadResult ? ` (${i.leadResult})` : '') : '')}
-      ${row('Escalation level', i.status === 'open' ? '' : i.escalationLevel)}${row('Total MP', i.mp || '')}${row('No. of M-C', i.mc || '')}${row('Downtime (report to containment)', i.downtimeH != null && i.status !== 'open' ? i.downtimeH + ' h' : '')}${row('Hours lost', i.hoursTotal || '')}${row('Cost', i.mhCost ? i.mhCost.toLocaleString('en-IN') : '')}
+      ${row('Escalation level', i.status === 'open' ? '' : i.escalationLevel)}${row('Total MP', i.mp || '')}${row('No. of M-C', i.mc || '')}${row('Downtime (report to containment)', i.downtimeH != null && i.status !== 'open' ? i.downtimeH + ' h' : '')}${row('Hours lost (system)', i.hoursTotal || '')}${row('Cost (system)', i.mhCost ? i.mhCost.toLocaleString('en-IN') : '')}${i.lossCorrectedH != null ? row('Corrected loss (hours)', `${i.lossCorrectedH} h, cost ${inr(i.lossCorrectedCost)}, by ${i.lossCorrectedBy || ''}`) + row('Reason for correction', i.lossCorrectedReason) : ''}
       ${row('Returned', i.returnCount ? `${i.returnCount} time(s). Last note: ${i.returnNote || ''}` : '')}${row('Approved by', i.approvedBy?.name)}${row('Approver note', i.approvalNote)}${row('PSM', i.psmRefer ? `Refer to PSM. ${i.psmReason || ''}` : '')}
       </dl>`;
     const actions = [{ label: 'Close', onClick: (x) => x.close() }];
     if (canApprove) { actions.push({ label: 'Return', kind: 'danger', onClick: (x) => { x.close(); returnDlg(i); } }, { label: 'Approve and close', kind: 'primary', onClick: (x) => { x.close(); approveDlg(i); } }); }
     if (canCosign) { actions.push({ label: 'Return', kind: 'danger', onClick: (x) => { x.close(); returnDlg(i); } }, { label: 'Sign off', kind: 'primary', onClick: (x) => { x.close(); signoffDlg(i); } }); }
     if (canAct) actions.push({ label: 'Add containment action', kind: 'primary', onClick: (x) => { x.close(); containDlg(i); } });
-    openModal({ title: `${issueNo(i)}: ${i.station || 'Issue'}`, html: body, wide: true, actions });
+    const mm = openModal({ title: `${issueNo(i)}: ${i.station || 'Issue'}`, html: body, wide: true, actions });
+    if (seeRep) listIssuesAtStation(i.station).then((fresh) => { const b = mm.el.querySelector('#repbox'); if (b && mm.el.isConnected) b.innerHTML = repeatHtml(repeatOf(i, fresh)); }).catch(() => {});
+    if (live) { const tk = setInterval(() => { if (!mm.el.isConnected) { clearInterval(tk); return; } const l = runLoss(i, i.mp, i.mc); const b = mm.el.querySelector('#liveBox'); if (b) b.innerHTML = `Downtime so far: <b>${esc(fmtDur(l.dt * 60))}</b> since the issue was reported (${esc(fmtDT(issueMs(i)))}).`; }, 15000); }
   }
 
   function extraFields(stage, skip, v = {}) {
@@ -260,19 +281,35 @@
       title: `Containment action: ${issueNo(i)}`, wide: true,
       html: `<p class="hint">${esc(i.station || '')} · ${esc(i.description || '')}</p>
         ${i.returnNote ? `<p class="hint" style="color:#b45309">Returned by approver: ${esc(i.returnNote)}</p>` : ''}
-        <p class="hint">Downtime is calculated automatically: reported ${esc(fmtDT(issueMs(i)))}, now ${esc(fmtDT(Date.now()))} = <b>${esc(fmtDur((Date.now() - issueMs(i)) / 60000))}</b>.</p>
+        <div id="c_rep">${repeatHtml(repeatOf(i))}</div>
+        <div class="est" id="c_est"></div>
         <form class="fg" autocomplete="off"><div class="full"><label class="l" for="c_text">${esc(LABELS.containment || 'Containment action')} *</label><textarea id="c_text" rows="4" maxlength="800"></textarea></div>
-        ${extraFields('responsible', ['containment'])}</form><div class="err" id="c_err"></div>`,
+        ${extraFields('responsible', ['containment'])}
+        <div class="full"><label style="display:flex;gap:8px;align-items:flex-start;font-weight:500"><input type="checkbox" id="c_fix" style="width:auto;margin-top:3px"><span>My response was late. I want to enter a corrected loss. The system downtime stays on record unchanged.</span></label></div>
+        <div id="c_fixbox" class="full" hidden><div class="fg"><div><label class="l" for="c_loss">Corrected loss (hours) *</label><input id="c_loss" type="number" min="0" step="any"></div>
+        <div class="full"><label class="l" for="c_why">Reason for the correction *</label><textarea id="c_why" rows="2" maxlength="400"></textarea></div></div></div></form><div class="err" id="c_err"></div>`,
       actions: [{ label: 'Cancel', onClick: (x) => x.close() }, { label: 'Submit for approval', kind: 'primary', onClick: save }]
     });
+    const paintEst = () => {
+      const g = (k) => m.el.querySelector('#x_' + k)?.value;
+      const l = runLoss(i, g('mp'), g('mc')), b = m.el.querySelector('#c_est'); if (!b) return;
+      b.innerHTML = `Downtime so far: <b>${esc(fmtDur(l.dt * 60))}</b> (reported ${esc(fmtDT(issueMs(i)))}). Estimated loss till now: <b>${esc(l.hours)} man-hours</b>${(Number(D.setup.rate) || 0) ? `, cost <b>${esc(inr(l.cost))}</b>` : ''}${Number(g('mp')) ? '' : ' (enter Total MP to see the loss)'}. It keeps growing until you submit.`;
+    };
+    paintEst(); const tk = setInterval(() => { if (!m.el.isConnected) clearInterval(tk); else paintEst(); }, 15000);
+    m.el.addEventListener('input', (e) => { if (/^x_(mp|mc)$/.test(e.target.id)) paintEst(); });
+    m.el.querySelector('#c_fix').onchange = (e) => { m.el.querySelector('#c_fixbox').hidden = !e.target.checked; };
+    listIssuesAtStation(i.station).then((fresh) => { const b = m.el.querySelector('#c_rep'); if (b) b.innerHTML = repeatHtml(repeatOf(i, fresh)); }).catch(() => {});
     async function save(x, btn) {
       const err = m.el.querySelector('#c_err'); err.textContent = '';
       const text = clean(m.el.querySelector('#c_text').value);
       if (!text) { err.textContent = 'Write the containment action.'; return; }
       const ex = readExtra(m.el, 'responsible', ['containment']); if (ex.error) { err.textContent = ex.error; return; }
+      const fix = m.el.querySelector('#c_fix').checked, cl = clean(m.el.querySelector('#c_loss').value), why = clean(m.el.querySelector('#c_why').value);
+      if (fix && (cl === '' || Number(cl) < 0)) { err.textContent = 'Enter the corrected loss in hours.'; return; }
+      if (fix && !why) { err.textContent = 'Write the reason for the corrected loss.'; return; }
       btn.disabled = true; x.locked = true;
       try {
-        const data = await submitContainment(i, me, { containment: text, ...ex.vals }, D.setup);
+        const data = await submitContainment(i, me, { containment: text, ...ex.vals, ...(fix ? { correctedLossH: Number(cl), correctedReason: why } : {}) }, D.setup);
         const extra = Object.fromEntries(Object.entries(ex.vals).filter(([k]) => !NUMS.has(k)));
         if (Object.keys(extra).length) await updateIssue(i.id, extra);
         x.locked = false; x.close(); toast('Sent to the approver.');
@@ -284,7 +321,7 @@
   function approveDlg(i) {
     const m = openModal({
       title: `Approve and close: ${issueNo(i)}`,
-      html: `<p class="hint">Containment by ${esc(i.containmentBy?.name || '')}: ${esc(i.containment || '')}</p>
+      html: `${repeatHtml(repeatOf(i))}<p class="hint">Containment by ${esc(i.containmentBy?.name || '')}: ${esc(i.containment || '')}<br>System downtime ${esc(i.downtimeH)} h, loss ${esc(i.hoursTotal || 0)} man-hours${i.lossCorrectedH != null ? `. <b>Corrected loss ${esc(i.lossCorrectedH)} h</b> by ${esc(i.lossCorrectedBy || '')}. Reason: ${esc(i.lossCorrectedReason || '')}` : ''}.</p>
         <form class="fg" autocomplete="off">${stageFields('approver').some((f) => f.key === 'approvalNote') ? `<div class="full"><label class="l" for="a_note">${esc(LABELS.approvalNote || 'Approver comment')}${D.setup.fields.approvalNote?.required ? ' *' : ''}</label><textarea id="a_note" rows="3"></textarea></div>` : ''}</form><div class="err" id="a_err"></div>`,
       actions: [{ label: 'Cancel', onClick: (x) => x.close() }, { label: 'Approve and close', kind: 'primary', onClick: save }]
     });
@@ -363,7 +400,7 @@
         'Model & MSN-PSN': i.model || '', 'Part Number': i.partNumber || '', 'Problem Description': i.description || '', 'Issue Category': i.category || '', 'Responsibility': i.respDept || '',
         'Issue Reported By': i.reportedByName || '', 'Responsible User': i.responsibleName || '', 'Repeatation': i.repeat || '', 'Containment Action': i.containment || '',
         'Containment Action Date & Time': fmtDT(tsMs(i.containmentAt)).replace(/^-$/, ''), 'Delay (Min)': i.delayMin ?? '', 'Lead Time Result': i.leadResult || '', 'Issue Escalation Level': i.status === 'open' ? '' : (i.escalationLevel || ''),
-        'Total MP': i.mp || 0, 'No. of M/C': i.mc || 0, 'Downtime (Hours)': i.downtimeH || 0, 'Hours Total': i.hoursTotal || 0, 'Total MH Loss Cost': i.mhCost || 0,
+        'Total MP': i.mp || 0, 'No. of M/C': i.mc || 0, 'Downtime (Hours)': i.downtimeH || 0, 'Hours Total': i.hoursTotal || 0, 'Total MH Loss Cost': i.mhCost || 0, 'Corrected Loss (Hours)': i.lossCorrectedH ?? '', 'Corrected Loss Cost': i.lossCorrectedCost ?? '', 'Correction Reason': i.lossCorrectedReason || '',
         'Containment Status': i.status === 'closed' ? (i.psmRefer ? 'Handover to PSM' : 'Closed') : i.status === 'pending' ? 'Waiting for approval' : 'Open'
       }));
       if (!rows.length) { toast('No issues to export.'); return; }
@@ -389,6 +426,8 @@
 
   /* ---------- tabs ---------- */
   let tab = 'tasks';
+  // keep the task list and repeat counts live: reload every minute while the list is showing and no dialog is open
+  setInterval(async () => { if (tab !== 'tasks' || document.hidden || document.querySelector('.ov')) return; try { await reloadIssues(); if (tab === 'tasks' && !document.querySelector('.ov')) show('tasks'); } catch { /* keep the current view */ } }, 60000);
   function show(k) {
     tab = k;
     const b = myBuckets(), todo = b.action.length + b.approve.length + b.escalated.length;

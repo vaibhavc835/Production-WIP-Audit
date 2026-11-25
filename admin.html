@@ -33,7 +33,7 @@
     getAdminMessage, setAdminMessage, DEFAULT_ADMIN_MESSAGE,
     listInventoryChecks, getInventoryCheck, updateInventoryCheck, deleteInventoryCheck,
     listStationsByDepartment, saveInventoryCheck, deleteInventoryChecksBulk, checkDay,
-    ORG_LEVELS, levelLabel, pageOptions, hasRealMailbox, sendResetLink, RESET_MAILBOX, getTempPassword, STORE_PASSWORDS_FOR_TESTING
+    ORG_LEVELS, levelLabel, lvOf, pageOptions, hasRealMailbox, sendResetLink, RESET_MAILBOX, getTempPassword, STORE_PASSWORDS_FOR_TESTING
   } from './js/wip-core.js';
 
   const ctx = await startPage({ active: 'admin', adminOnly: true, title: 'Admin Control' });
@@ -288,7 +288,7 @@
           <label class="pgall"><input type="checkbox" id="f_pall" ${!Array.isArray(u?.pages) ? 'checked' : ''}> All pages (new pages are included automatically)</label>
           <div class="deptgrid" id="f_pages">${pageOptions().map((p) => `<label><input type="checkbox" value="${esc(p.key)}" ${!Array.isArray(u?.pages) || u.pages.includes(p.key) ? 'checked' : ''}> ${esc(p.label)}</label>`).join('')}</div>
           <div class="hint">Home, About and User Profile are always available. Administrators can open every page.</div><style>.pgall{display:flex;gap:8px;align-items:center;font-weight:600;margin-bottom:8px}.pgall input{width:auto}</style></div>
-        <div><label class="l" for="f_lv">Organization level</label><select id="f_lv">${ORG_LEVELS.map((l) => `<option value="${l.n}" ${Number(u?.level || 1) === l.n ? 'selected' : ''}>${esc(l.label)}</option>`).join('')}</select></div>
+        <div><label class="l" for="f_lv">Organization level</label><select id="f_lv">${ORG_LEVELS.map((l) => `<option value="${l.n}" ${(u ? lvOf(u.level) : 1) === l.n ? 'selected' : ''}>${esc(l.label)}</option>`).join('')}</select></div>
         <div><label class="l" for="f_rt">Reports to</label><select id="f_rt"></select><div class="hint">Used for issue escalation and approval.</div></div>
       </form><div class="err" id="f_err"></div>`,
       actions: [
@@ -301,8 +301,8 @@
     let chosenRt = u?.reportsTo || '';
     const fillRt = () => {
       const lv = Number($('f_lv').value) || 1;
-      const cands = state.users.filter((z) => z.uid !== u?.uid && z.active !== false && Number(z.level || 1) > lv)
-        .sort((a, b) => Number(a.level || 1) - Number(b.level || 1) || String(a.name).localeCompare(String(b.name)));
+      const cands = state.users.filter((z) => z.uid !== u?.uid && z.active !== false && lvOf(z.level) > lv)
+        .sort((a, b) => lvOf(a.level) - lvOf(b.level) || String(a.name).localeCompare(String(b.name)));
       if (!cands.some((z) => z.uid === chosenRt)) chosenRt = '';
       $('f_rt').innerHTML = `<option value="">${lv >= 5 ? 'Nobody (top of the chart)' : 'Not set'}</option>` +
         cands.map((z) => `<option value="${esc(z.uid)}" ${z.uid === chosenRt ? 'selected' : ''}>${esc(z.name)} (${esc(levelLabel(z.level))})</option>`).join('');
@@ -332,14 +332,14 @@
       btn.disabled = true; x.locked = true;
       try {
         if (edit) {
-          const data = { name, departments, pages, level: Number($('f_lv').value) || 1, reportsTo: chosenRt, ...(me ? {} : { role }), ...(idEditable ? { employeeId: id } : {}) };
+          const data = { name, departments, pages, level: lvOf($('f_lv').value), reportsTo: chosenRt, ...(me ? {} : { role }), ...(idEditable ? { employeeId: id } : {}) };
           await updateUser(u.uid, data); Object.assign(u, data);
         } else {
           const password = $('f_pw').value;
           if (password.length < 6) { err.textContent = 'The starting password needs at least 6 characters.'; btn.disabled = false; x.locked = false; return; }
           if (state.users.some((z) => String(z.employeeId) === id)) { err.textContent = 'This user ID is already in the list.'; btn.disabled = false; x.locked = false; return; }
           const nextNo = Math.max(0, ...state.users.map((z) => Number(z.userNo) || 0)) + 1;
-          state.users.push(await createUser({ employeeId: id, name, password, role, departments, pages, userNo: nextNo, level: Number($('f_lv').value) || 1, reportsTo: chosenRt }));
+          state.users.push(await createUser({ employeeId: id, name, password, role, departments, pages, userNo: nextNo, level: lvOf($('f_lv').value), reportsTo: chosenRt }));
         }
         x.locked = false; x.close(); updateTiles(); drawUsers(); toast(edit ? 'Changes saved.' : 'User added.');
       } catch (e) { err.textContent = friendlyError(e); btn.disabled = false; x.locked = false; }
@@ -385,7 +385,7 @@
     const exist = new Set(state.users.map((u) => String(u.employeeId)));
     const rows = parsed.rows.map((r, i) => ({
       userNo: Number(r.userno) || i + 1, name: clean(r.employeename), employeeId: clean(r.userid),
-      level: Math.min(5, Math.max(1, Number(String(r.level ?? r.organizationlevel ?? '').match(/[1-5]/)?.[0]) || 1)), reportsToId: clean(r.reportstouserid ?? r.reportsto ?? r.reportstoid ?? r.superiorid), role: /^admin/i.test(clean(r.role)) ? 'admin' : 'user', pages: parsePages(r.pageaccess ?? r.pages),
+      level: lvOf(String(r.level ?? r.organizationlevel ?? '').match(/[0-5]/)?.[0]), reportsToId: clean(r.reportstouserid ?? r.reportsto ?? r.reportstoid ?? r.superiorid), role: /^admin/i.test(clean(r.role)) ? 'admin' : 'user', pages: parsePages(r.pageaccess ?? r.pages),
       password: String(r.userpassword ?? '').trim(), departments: [...new Set(Object.keys(r).filter((k) => /^(accessdepartment|departments?)\d*$/.test(k)).flatMap((k) => String(r[k] ?? '').split(/[,;\/]/)).map(fixDept).filter(Boolean))]
     })).filter((r) => r.name || r.employeeId);
     rows.forEach((r) => {
