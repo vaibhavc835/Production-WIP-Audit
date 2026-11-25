@@ -86,12 +86,13 @@
 </script>
 <script type="module">
   import {
-    startPage, esc, toast, confirmBox, friendlyError, DEPARTMENTS,
+    startPage, esc, toast, confirmBox, friendlyError, DEPARTMENTS, getMaster,
     listStationsByDepartment, getLatestCheck, saveInventoryCheck
   } from './js/wip-core.js';
 
   const ctx = await startPage({ active: 'inventory', title: 'Inventory' });
   const main = ctx.main;
+  await getMaster().catch(() => null);   // fills the department list from Master Data (departments that have inventory points)
 
   // A user sees the departments listed in their profile; "All" means every department.
   const depts = ctx.departments.includes('All')
@@ -166,7 +167,7 @@
           <th>Station</th><th class="num">Min</th><th class="num">Max</th><th>Actual quantity</th><th>Result</th><th>Reason if Not OK</th>
         </tr></thead><tbody id="rows">${cur.rows.map((r, i) => `
           <tr data-i="${i}">
-            <td data-label="Station"><b>${esc(r.stationName)}</b>${r.stationCode ? `<small>${esc(r.stationCode)}</small>` : ''}</td>
+            <td data-label="Station"><b>${esc(r.point || r.stationName)}</b>${r.group ? `<small>${esc(r.group)}</small>` : r.stationCode ? `<small>${esc(r.stationCode)}</small>` : ''}</td>
             <td class="num" data-label="Min">${esc(r.min)}</td>
             <td class="num" data-label="Max">${esc(r.max)}</td>
             <td data-label="Actual quantity"><input class="act" type="number" inputmode="numeric" min="0" step="1" aria-label="Actual quantity at ${esc(r.stationName)}"></td>

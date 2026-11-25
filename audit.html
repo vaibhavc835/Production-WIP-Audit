@@ -28,7 +28,7 @@
 <script type="module">
   import {
     startPage, icon, esc, toast, openModal, friendlyError,
-    listStations, listColl, listAuditForms, listAuditResponses, submitAudit, dayKeyOf
+    listStations, listColl, getMaster, auditPlacesFromMaster, listAuditForms, listAuditResponses, submitAudit, dayKeyOf
   } from './js/wip-core.js';
   import { renderSheet, sheetTableHtml } from './js/audit-sheet.js';
 
@@ -80,10 +80,11 @@
 
   let forms = [], places = new Map();   // places: department -> Set of lines
   async function loadBase() {
-    const [f, inv, iss] = await Promise.all([listAuditForms(), listStations().catch(() => []), listColl('issueStations').catch(() => [])]);
+    const [f, m] = await Promise.all([listAuditForms(), getMaster().catch(() => ({ has: false, stations: [] }))]);
     forms = f.filter((x) => x.active !== false);
     const add = (d, l) => { d = clean(d); l = clean(l); if (!d) return; if (!places.has(d)) places.set(d, new Set()); if (l) places.get(d).add(l); };
-    inv.forEach((s) => add(s.department, s.line)); iss.forEach((s) => add(s.area, s.line));
+    if (m.has) auditPlacesFromMaster(m).forEach((lines, d) => lines.forEach((l) => add(d, l)));
+    else { const [inv, iss] = await Promise.all([listStations().catch(() => []), listColl('issueStations').catch(() => [])]); inv.forEach((s) => add(s.department, s.line)); iss.forEach((s) => add(s.area, s.line)); }
   }
   try { await loadBase(); } catch (e) { root.innerHTML = `<div class="empty"><b>Could not load the audit forms.</b><p>${esc(friendlyError(e))}</p></div>`; throw e; }
 

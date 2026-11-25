@@ -33,11 +33,12 @@
     getAdminMessage, setAdminMessage, DEFAULT_ADMIN_MESSAGE,
     listInventoryChecks, getInventoryCheck, updateInventoryCheck, deleteInventoryCheck,
     listStationsByDepartment, saveInventoryCheck, deleteInventoryChecksBulk, checkDay,
-    ORG_LEVELS, levelLabel, lvOf, pageOptions, hasRealMailbox, sendResetLink, RESET_MAILBOX, getTempPassword, STORE_PASSWORDS_FOR_TESTING
+    ORG_LEVELS, levelLabel, lvOf, getMaster, masterDepts, masterLines, masterStationNames, scopeOf, scopeLabel, pageOptions, hasRealMailbox, sendResetLink, RESET_MAILBOX, getTempPassword, STORE_PASSWORDS_FOR_TESTING
   } from './js/wip-core.js';
 
   const ctx = await startPage({ active: 'admin', adminOnly: true, title: 'Admin Control' });
   const main = ctx.main;
+  let MST = await getMaster().catch(() => ({ stations: [], inv: [], has: false }));   // also refreshes the inventory department list
 
   const state = { users: [], stations: [], checks: [], message: null, tab: 'users', loaded: { users: false, stations: false, checks: false } };
   const clean = (v) => String(v ?? '').replace(/\s+/g, ' ').trim();
@@ -87,7 +88,7 @@
       <p>Manage who can sign in, the station limits, past inventory checks, and the message shown on Home.</p></div>
     <div class="tiles" id="tabs">
       <button type="button" class="tile" data-t="users"><span class="ico">${icon('users')}</span><span><b>User Database</b><small id="cUsers">Loading</small></span></button>
-      <button type="button" class="tile" data-t="inventory"><span class="ico">${icon('db')}</span><span><b>Station Database</b><small id="cInv">Loading</small></span></button>
+      <button type="button" class="tile" data-t="master"><span class="ico">${icon('db')}</span><span><b>Master Data</b><small id="cInv">Loading</small></span></button>
       <button type="button" class="tile" data-t="history"><span class="ico">${icon('clipboard')}</span><span><b>Inventory History</b><small id="cHist">View / Add past checks</small></span></button>
       <button type="button" class="tile" data-t="issuesetup"><span class="ico">${icon('alert')}</span><span><b>Issue Setup</b><small>Masters, lead time, fields</small></span></button>
       <button type="button" class="tile" data-t="improvementsetup"><span class="ico">${icon('trend')}</span><span><b>Improvement Setup</b><small>Lines, codes, stations, users</small></span></button>
@@ -100,16 +101,16 @@
   function updateTiles() {
     const admins = state.users.filter((u) => u.role === 'admin').length;
     main.querySelector('#cUsers').textContent = state.loaded.users ? `${state.users.length} users, ${admins} admin${admins === 1 ? '' : 's'}` : 'Loading';
-    main.querySelector('#cInv').textContent = state.loaded.stations ? `${state.stations.length} stations` : 'Loading';
+    main.querySelector('#cInv').textContent = MST.has ? `${MST.stations.length} stations, ${MST.inv.length} inventory points` : 'Not set up yet';
     main.querySelector('#cHist').textContent = state.loaded.checks ? `${state.checks.length} checks` : 'View / Add past checks';
     main.querySelectorAll('#tabs .tile').forEach((t) => t.classList.toggle('on', t.dataset.t === state.tab));
   }
   main.querySelectorAll('#tabs .tile').forEach((t) => { t.onclick = () => { location.hash = t.dataset.t; }; });
   const route = () => {
     const h = location.hash.replace('#', '');
-    state.tab = ['users', 'inventory', 'history', 'issuesetup', 'improvementsetup', 'auditforms', 'message'].includes(h) ? h : 'users';
+    state.tab = ['users', 'inventory', 'master', 'history', 'issuesetup', 'improvementsetup', 'auditforms', 'message'].includes(h) ? h : 'users';
     updateTiles();
-    ({ users: renderUsers, inventory: renderInventory, history: renderHistory, issuesetup: renderIssueSetupTab, improvementsetup: renderImpSetupTab, auditforms: renderAuditTab, message: renderMessage })[state.tab]();
+    ({ users: renderUsers, inventory: renderInventory, master: renderMasterTab, history: renderHistory, issuesetup: renderIssueSetupTab, improvementsetup: renderImpSetupTab, auditforms: renderAuditTab, message: renderMessage })[state.tab]();
   };
   window.addEventListener('hashchange', route);
 
@@ -186,7 +187,7 @@
         <button type="button" class="btn btn-primary" id="uAdd">${icon('plus')}<span>Add user</span></button>
       </div>
       <div class="tbl-wrap"><table class="tbl"><thead><tr>
-        <th>No.</th><th>Employee name</th><th>User ID</th><th>Role</th><th>Level</th><th>Reports to</th><th>Access departments</th><th>Page access</th><th>Status</th><th></th>
+        <th>No.</th><th>Employee name</th><th>User ID</th><th>Role</th><th>Level</th><th>Assigned to</th><th>Reports to</th><th>Access departments</th><th>Page access</th><th>Status</th><th></th>
       </tr></thead><tbody id="ub"></tbody></table></div>
       <div class="note" id="uNote"></div>`;
     const f = () => drawUsers();
@@ -213,6 +214,7 @@
         <td data-label="User ID">${esc(u.employeeId)}</td>
         <td data-label="Role"><span class="badge ${u.role === 'admin' ? 'admin' : ''}">${u.role === 'admin' ? 'Admin' : 'User'}</span></td>
         <td data-label="Level">${esc(levelLabel(u.level))}</td>
+        <td data-label="Assigned to">${esc(scopeLabel(u) || '-')}</td>
         <td data-label="Reports to">${esc(state.users.find((z) => z.uid === u.reportsTo)?.name || '-')}</td>
         <td data-label="Departments">${esc((u.departments || []).join(', '))}</td>
         <td data-label="Page access">${u.role === 'admin' || !Array.isArray(u.pages) ? 'All pages' : `<span title="${esc(pageOptions().filter((p) => u.pages.includes(p.key)).map((p) => p.label).join(', ') || 'Home only')}">${u.pages.filter((k) => pageOptions().some((p) => p.key === k)).length} of ${pageOptions().length}</span>`}</td>
@@ -223,7 +225,7 @@
           ${me ? '' : `<button type="button" class="btn btn-ghost btn-sm" data-r="${esc(u.uid)}">Reset password</button>`}
           ${me ? '' : `<button type="button" class="btn btn-sm ${off ? 'btn-ghost' : 'btn-danger'}" data-t="${esc(u.uid)}">${off ? 'Activate' : 'Deactivate'}</button>`}
         </div></td></tr>`;
-    }).join('') || `<tr><td colspan="10"><div class="empty">${state.users.length ? 'No users match these filters.' : 'No users yet. Add one, or import your Excel file.'}</div></td></tr>`;
+    }).join('') || `<tr><td colspan="11"><div class="empty">${state.users.length ? 'No users match these filters.' : 'No users yet. Add one, or import your Excel file.'}</div></td></tr>`;
     panel.querySelector('#uNote').textContent = `Showing ${list.length} of ${state.users.length} users`;
     tb.querySelectorAll('[data-e]').forEach((b) => { b.onclick = () => userDialog(state.users.find((u) => u.uid === b.dataset.e)); });
     tb.querySelectorAll('[data-p]').forEach((b) => { b.onclick = () => showTemp(state.users.find((u) => u.uid === b.dataset.p)); });
@@ -289,7 +291,10 @@
           <div class="deptgrid" id="f_pages">${pageOptions().map((p) => `<label><input type="checkbox" value="${esc(p.key)}" ${!Array.isArray(u?.pages) || u.pages.includes(p.key) ? 'checked' : ''}> ${esc(p.label)}</label>`).join('')}</div>
           <div class="hint">Home, About and User Profile are always available. Administrators can open every page.</div><style>.pgall{display:flex;gap:8px;align-items:center;font-weight:600;margin-bottom:8px}.pgall input{width:auto}</style></div>
         <div><label class="l" for="f_lv">Organization level</label><select id="f_lv">${ORG_LEVELS.map((l) => `<option value="${l.n}" ${(u ? lvOf(u.level) : 1) === l.n ? 'selected' : ''}>${esc(l.label)}</option>`).join('')}</select></div>
-        <div><label class="l" for="f_rt">Reports to</label><select id="f_rt"></select><div class="hint">Used for issue escalation and approval.</div></div>
+        <div class="full"><label class="l">Works at (optional)</label>
+          <div class="fg" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr))"><div><select id="f_sd" aria-label="Department"></select></div><div id="w_sl"><select id="f_sl" aria-label="Line"></select></div><div id="w_ss"><select id="f_ss" aria-label="Station"></select></div></div>
+          <div class="hint" id="f_sh"></div></div>
+        <div class="full"><label class="l" for="f_rt">Reports to</label><select id="f_rt"></select><div class="hint" id="f_rh">Used for issue escalation and approval.</div></div>
       </form><div class="err" id="f_err"></div>`,
       actions: [
         { label: 'Cancel', onClick: (x) => x.close() },
@@ -300,13 +305,31 @@
     $('f_gen')?.addEventListener('click', () => { $('f_pw').value = genPw(); });
     let chosenRt = u?.reportsTo || '';
     const fillRt = () => {
-      const lv = Number($('f_lv').value) || 1;
-      const cands = state.users.filter((z) => z.uid !== u?.uid && z.active !== false && lvOf(z.level) > lv)
-        .sort((a, b) => lvOf(a.level) - lvOf(b.level) || String(a.name).localeCompare(String(b.name)));
+      const lv = lvOf($('f_lv').value);
+      // a user reports to someone exactly one level above: 0 to 1, 1 to 2, 2 to 3, 3 to 4, 4 to 5
+      const mine = { d: $('f_sd').value, l: $('f_sl').value };
+      const near = (z) => (mine.d && z.scopeDept === mine.d ? 2 : 0) + (mine.l && z.scopeLine === mine.l ? 1 : 0);
+      const cands = state.users.filter((z) => z.uid !== u?.uid && z.active !== false && lvOf(z.level) === lv + 1)
+        .sort((a, b) => near(b) - near(a) || String(a.name).localeCompare(String(b.name)));
+      $('f_rh').textContent = lv >= 5 ? 'Level 5 is the top of the chart.' : `A ${levelLabel(lv)} user reports to a ${levelLabel(lv + 1)} user. People from the same area are listed first.`;
       if (!cands.some((z) => z.uid === chosenRt)) chosenRt = '';
       $('f_rt').innerHTML = `<option value="">${lv >= 5 ? 'Nobody (top of the chart)' : 'Not set'}</option>` +
-        cands.map((z) => `<option value="${esc(z.uid)}" ${z.uid === chosenRt ? 'selected' : ''}>${esc(z.name)} (${esc(levelLabel(z.level))})</option>`).join('');
+        cands.map((z) => `<option value="${esc(z.uid)}" ${z.uid === chosenRt ? 'selected' : ''}>${esc(z.name)}${scopeLabel(z) ? ' · ' + esc(scopeLabel(z)) : ''}</option>`).join('');
     };
+    // Works at: Level 0 = station, Level 1 and 2 = line, Level 3 to 5 = department (dependent drop-downs from Master Data)
+    const fillScope = (keep) => {
+      const lv = lvOf($('f_lv').value), sc = keep || { d: $('f_sd').value, l: $('f_sl').value, s: $('f_ss').value };
+      const o = (list, cur, ph) => `<option value="">${ph}</option>` + list.map((x) => `<option ${x === cur ? 'selected' : ''}>${esc(x)}</option>`).join('');
+      $('f_sd').innerHTML = o(masterDepts(MST), sc.d, 'Department');
+      const dOk = $('f_sd').value;
+      $('f_sl').innerHTML = o(dOk ? masterLines(MST, dOk) : [], sc.l, dOk ? 'Line' : 'Choose department first');
+      $('f_ss').innerHTML = o($('f_sl').value ? masterStationNames(MST, dOk, $('f_sl').value) : [], sc.s, $('f_sl').value ? 'Station' : 'Choose line first');
+      $('w_sl').hidden = lv > 2; $('w_ss').hidden = lv !== 0;
+      $('f_sh').textContent = MST.has ? (lv === 0 ? 'Level 0 works at a station: choose department, line and station.' : lv <= 2 ? 'Level 1 and 2 look after a line: choose department and line.' : 'Level 3 to 5 look after a department.') : 'Master Data is empty. Import it first (Admin Control > Master Data).';
+    };
+    fillScope({ d: u?.scopeDept || '', l: u?.scopeLine || '', s: u?.scopeStation || '' });
+    $('f_sd').onchange = () => { fillScope({ d: $('f_sd').value, l: '', s: '' }); fillRt(); };
+    $('f_sl').onchange = () => { fillScope({ d: $('f_sd').value, l: $('f_sl').value, s: '' }); fillRt(); };
     m.el.querySelector('#f_deps').addEventListener('change', (e) => {
       const boxes = [...m.el.querySelectorAll('#f_deps input')];
       if (e.target.value === 'All' && e.target.checked) boxes.forEach((b) => { if (b.value !== 'All') b.checked = false; });
@@ -315,7 +338,7 @@
     const pg = () => [...m.el.querySelectorAll('#f_pages input')];
     $('f_pall').onchange = () => { pg().forEach((b) => { b.checked = $('f_pall').checked; }); };
     m.el.querySelector('#f_pages').addEventListener('change', () => { $('f_pall').checked = pg().every((b) => b.checked); });
-    $('f_lv').onchange = fillRt; $('f_rt').onchange = () => { chosenRt = $('f_rt').value; }; fillRt();
+    $('f_lv').onchange = () => { fillScope(); fillRt(); }; $('f_rt').onchange = () => { chosenRt = $('f_rt').value; }; fillRt();
 
     async function save(x, btn) {
       const name = clean($('f_name').value), id = clean($('f_id').value);
@@ -332,39 +355,79 @@
       btn.disabled = true; x.locked = true;
       try {
         if (edit) {
-          const data = { name, departments, pages, level: lvOf($('f_lv').value), reportsTo: chosenRt, ...(me ? {} : { role }), ...(idEditable ? { employeeId: id } : {}) };
+          const data = { name, departments, pages, level: lvOf($('f_lv').value), reportsTo: chosenRt, ...scopeOf($('f_lv').value, { dept: $('f_sd').value, line: $('f_sl').value, station: $('f_ss').value }), ...(me ? {} : { role }), ...(idEditable ? { employeeId: id } : {}) };
           await updateUser(u.uid, data); Object.assign(u, data);
         } else {
           const password = $('f_pw').value;
           if (password.length < 6) { err.textContent = 'The starting password needs at least 6 characters.'; btn.disabled = false; x.locked = false; return; }
           if (state.users.some((z) => String(z.employeeId) === id)) { err.textContent = 'This user ID is already in the list.'; btn.disabled = false; x.locked = false; return; }
           const nextNo = Math.max(0, ...state.users.map((z) => Number(z.userNo) || 0)) + 1;
-          state.users.push(await createUser({ employeeId: id, name, password, role, departments, pages, userNo: nextNo, level: lvOf($('f_lv').value), reportsTo: chosenRt }));
+          state.users.push(await createUser({ employeeId: id, name, password, role, departments, pages, userNo: nextNo, level: lvOf($('f_lv').value), reportsTo: chosenRt, scopeDept: $('f_sd').value, scopeLine: $('f_sl').value, scopeStation: $('f_ss').value }));
         }
         x.locked = false; x.close(); updateTiles(); drawUsers(); toast(edit ? 'Changes saved.' : 'User added.');
       } catch (e) { err.textContent = friendlyError(e); btn.disabled = false; x.locked = false; }
     }
   }
 
+  // The Excel template is built from the live Master Data and user list, so the drop-downs always match the app.
+  // Line depends on Department, Station depends on Department + Line, Reports To depends on Level.
   async function downloadUserTemplate() {
     try {
-      const X = await loadXLSX();
-      const head = ['User No', 'Employee Name', 'User ID', 'User Password', 'Role', 'Access Department 1', 'Access Department 2', 'Access Department 3', 'Level', 'Reports To (User ID)', 'Page Access'];
-      const depts = DEPARTMENTS.filter((d) => d !== 'All');
-      const rows = [head,
-        [1, 'Example MD', '10000001', 'ChangeMe@1', 'User', 'All', '', '', 5, '', 'All'],
-        [2, 'Example Manager', '10000002', 'ChangeMe@2', 'User', depts[0] || '', depts[1] || '', '', 2, '10000001', 'All'],
-        [3, 'Example Engineer', '10000003', 'ChangeMe@3', 'User', depts[0] || '', '', '', 1, '10000002', 'Inventory, Issue Report, Audit']];
-      const info = [['Column', 'What to enter'],
-        ['User No', 'Optional serial number'], ['Employee Name', 'Required'], ['User ID', 'Required. Employee ID, no spaces. This is what the user types to sign in'],
-        ['User Password', 'Required, at least 6 characters. Used once to create the login and not saved. The user must change it at first sign-in'],
-        ['Role', 'Optional. User (default) or Admin'], ['Access Department 1, 2, 3 …', 'At least one. Choose from: All, ' + depts.join(', ') + '. Add more columns (Access Department 4, 5 …) if needed. Several departments can also be written in one cell separated by commas'],
-        ['Level', '1 Engineer, 2 Manager, 3 HOD, 4 GM, 5 MD'], ['Page Access', 'Optional. Blank or All = every page. Otherwise the pages this user may open, separated by commas: ' + pageOptions().map((p) => p.label).join(', ') + '. Home, About and User Profile are always open'], ['Reports To (User ID)', 'Optional. User ID of the person this user reports to. That person can be anywhere in the file or already in the database'],
-        ['Delete the three example rows before you upload.', '']];
-      const w1 = X.utils.aoa_to_sheet(rows), w2 = X.utils.aoa_to_sheet(info);
-      w1['!cols'] = [8, 24, 14, 16, 8, 20, 20, 20, 8, 20, 30].map((w) => ({ wch: w })); w2['!cols'] = [30, 110].map((w) => ({ wch: w }));
-      const wb = X.utils.book_new(); X.utils.book_append_sheet(wb, w1, 'Users'); X.utils.book_append_sheet(wb, w2, 'Instructions');
-      X.writeFile(wb, 'User_Import_Template.xlsx'); toast('Template downloaded.');
+      const { loadExcelJS } = await import('./js/audit-import.js');
+      const E = await loadExcelJS(), M = await getMaster(true); MST = M;
+      const wb = new E.Workbook(), ws = wb.addWorksheet('Users', { views: [{ state: 'frozen', ySplit: 1 }] });
+      const heads = [['User No', 8], ['Employee Name', 24], ['User ID', 14], ['User Password', 16], ['Role', 9], ['Access Department 1', 20], ['Access Department 2', 20], ['Access Department 3', 20], ['Level', 8], ['Assigned Department', 24], ['Assigned Line', 24], ['Assigned Station', 30], ['Reports To (User ID)', 18], ['Page Access', 30]];
+      ws.columns = heads.map(([h, w]) => ({ header: h, width: w }));
+      const hr = ws.getRow(1); hr.font = { bold: true }; hr.alignment = { wrapText: true, vertical: 'middle' }; hr.height = 32;
+      hr.eachCell((c) => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } }; });
+      const depts = masterDepts(M), invDepts = DEPARTMENTS.filter((d) => d !== 'All');
+      // helper sheets
+      const L = wb.addWorksheet('Lists'); invDepts.unshift('All'); depts.forEach((d, n) => { L.getCell(n + 1, 1).value = d; }); invDepts.forEach((d, n) => { L.getCell(n + 1, 3).value = d; });
+      const LL = wb.addWorksheet('LineList'), SL = wb.addWorksheet('StationList'), BL = wb.addWorksheet('BossList');
+      // column A of each helper sheet is a '-' placeholder, used while the Department or Line above is still empty
+      LL.getCell(1, 1).value = '-'; LL.getCell(2, 1).value = 1; LL.getCell(3, 1).value = '-'; SL.getCell(1, 1).value = '-'; SL.getCell(2, 1).value = 1; SL.getCell(3, 1).value = '-';
+      depts.forEach((d, c) => { const ls = masterLines(M, d); LL.getCell(1, c + 2).value = d; LL.getCell(2, c + 2).value = ls.length; ls.forEach((l, k) => { LL.getCell(k + 3, c + 2).value = l; }); });
+      let c2 = 1;
+      depts.forEach((d) => masterLines(M, d).forEach((l) => { const st = masterStationNames(M, d, l); if (!st.length) return; c2++; SL.getCell(1, c2).value = d + '|' + l; SL.getCell(2, c2).value = st.length; st.forEach((x, k) => { SL.getCell(k + 3, c2).value = x; }); }));
+      for (let lv = 0; lv <= 5; lv++) { BL.getCell(1, lv + 1).value = lv; BL.getCell(2, lv + 1).value = '-'; state.users.filter((u) => u.active !== false && lvOf(u.level) === lv && u.employeeId).forEach((u, k) => { BL.getCell(k + 3, lv + 1).value = String(u.employeeId); }); }
+      BL.getCell(1, 7).value = 6; BL.getCell(2, 7).value = '-';
+      [L, LL, SL, BL].forEach((w) => { w.state = 'hidden'; });
+      // examples that show the reporting chain (delete them before you upload)
+      const first = M.stations.find((x) => x.station) || M.stations[0] || { dept: '', line: '', station: '' };
+      const ex = [[1, 'Example MD', '10000005', 'ChangeMe@5', 'User', 'All', '', '', 5, first.dept, '', '', '', 'All'],
+        [2, 'Example GM', '10000004', 'ChangeMe@4', 'User', first.dept, '', '', 4, first.dept, '', '', '10000005', 'All'],
+        [3, 'Example HOD', '10000003', 'ChangeMe@3', 'User', first.dept, '', '', 3, first.dept, '', '', '10000004', 'All'],
+        [4, 'Example Manager', '10000002', 'ChangeMe@2', 'User', first.dept, '', '', 2, first.dept, first.line, '', '10000003', 'All'],
+        [5, 'Example Engineer', '10000001', 'ChangeMe@1', 'User', first.dept, '', '', 1, first.dept, first.line, '', '10000002', 'Inventory, Issue Report, Audit'],
+        [6, 'Example Workman', '10000000', 'ChangeMe@0', 'User', first.dept, '', '', 0, first.dept, first.line, first.station, '10000001', 'Issue Report']];
+      ex.forEach((r) => { const row = ws.addRow(r); row.font = { italic: true, color: { argb: 'FF64748B' } }; });
+      const last = 400, n = depts.length;
+      const lineF = 'OFFSET(LineList!$A$3,0,IFERROR(MATCH($J2,LineList!$A$1:$ZZ$1,0),1)-1,INDEX(LineList!$A$2:$ZZ$2,1,IFERROR(MATCH($J2,LineList!$A$1:$ZZ$1,0),1)),1)';
+      const stF = 'OFFSET(StationList!$A$3,0,IFERROR(MATCH($J2&"|"&$K2,StationList!$A$1:$ZZ$1,0),1)-1,INDEX(StationList!$A$2:$ZZ$2,1,IFERROR(MATCH($J2&"|"&$K2,StationList!$A$1:$ZZ$1,0),1)),1)';
+      const bossF = 'OFFSET(BossList!$A$2,0,IFERROR(MATCH($I2+1,BossList!$A$1:$G$1,0),7)-1,COUNTA(INDEX(BossList!$A$2:$G$300,0,IFERROR(MATCH($I2+1,BossList!$A$1:$G$1,0),7))),1)';
+      const warn = { showErrorMessage: true, errorStyle: 'warning', errorTitle: 'Not in the list', error: 'This value is not in the list. Continue only if you are sure.' };
+      for (let r = 2; r <= last; r++) {
+        const set = (col, f) => { ws.getCell(col + r).dataValidation = { type: 'list', allowBlank: true, formulae: [f], ...warn }; };
+        set('E', '"User,Admin"'); set('I', '"0,1,2,3,4,5"');
+        if (invDepts.length) { set('F', `Lists!$C$1:$C$${invDepts.length}`); set('G', `Lists!$C$1:$C$${invDepts.length}`); set('H', `Lists!$C$1:$C$${invDepts.length}`); }
+        if (n) set('J', `Lists!$A$1:$A$${n}`);
+        set('K', lineF.replace(/\$J2/g, '$J' + r)); set('L', stF.replace(/\$J2/g, '$J' + r).replace(/\$K2/g, '$K' + r)); set('M', bossF.replace(/\$I2/g, '$I' + r));
+      }
+      const info = wb.addWorksheet('Instructions', { properties: { tabColor: { argb: 'FF0F766E' } } }); info.columns = [{ width: 30 }, { width: 120 }];
+      [['Column', 'What to enter'], ['User No', 'Optional serial number'], ['Employee Name', 'Required'], ['User ID', 'Required. Employee ID, no spaces. This is what the user types to sign in'],
+        ['User Password', 'Required, at least 6 characters. Used once to create the login. The user must change it at first sign-in'], ['Role', 'Optional. User (default) or Admin'],
+        ['Access Department 1, 2, 3', 'Inventory access. At least one. Pick from the list. All = every department'],
+        ['Level', '0 Workman, 1 Engineer, 2 Manager, 3 HOD, 4 GM, 5 MD'],
+        ['Assigned Department / Line / Station', 'Optional. Pick from the lists: Line depends on Department, Station depends on the Department and Line. Level 0 uses Department, Line and Station. Level 1 and 2 use Department and Line. Level 3, 4 and 5 use Department only. Anything extra is ignored'],
+        ['Reports To (User ID)', 'Optional. A user reports to someone exactly one level above: Level 0 to 1, 1 to 2, 2 to 3, 3 to 4, 4 to 5. The list shows existing users of that level. You can also type the ID of someone created in the same file. Level 5 reports to nobody'],
+        ['Page Access', 'Optional. Blank or All = every page. Otherwise page names separated by commas: ' + pageOptions().map((p) => p.label).join(', ') + '. Home, About and User Profile are always open'],
+        ['', ''], ['Delete the six grey example rows before you upload.', '']].forEach((x) => info.addRow(x));
+      info.getRow(1).font = { bold: true }; info.eachRow((rw) => { rw.alignment = { wrapText: true, vertical: 'top' }; });
+      wb.views = [{ activeTab: 0 }];
+      const buf = await wb.xlsx.writeBuffer();
+      const url = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+      const a = document.createElement('a'); a.href = url; a.download = 'User_Import_Template.xlsx'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000);
+      toast('Template downloaded.');
     } catch (e) { toast(e.message || friendlyError(e)); }
   }
 
@@ -383,24 +446,39 @@
     try { parsed = await readSheet(file, ['userid', 'employeename']); }
     catch (e) { toast(e.message); return; }
     const exist = new Set(state.users.map((u) => String(u.employeeId)));
-    const rows = parsed.rows.map((r, i) => ({
+    const M = await getMaster(); MST = M;
+    const rows = parsed.rows.map((r, i) => ({ sd: clean(r.assigneddepartment), sl: clean(r.assignedline), ss: clean(r.assignedstation),
       userNo: Number(r.userno) || i + 1, name: clean(r.employeename), employeeId: clean(r.userid),
       level: lvOf(String(r.level ?? r.organizationlevel ?? '').match(/[0-5]/)?.[0]), reportsToId: clean(r.reportstouserid ?? r.reportsto ?? r.reportstoid ?? r.superiorid), role: /^admin/i.test(clean(r.role)) ? 'admin' : 'user', pages: parsePages(r.pageaccess ?? r.pages),
       password: String(r.userpassword ?? '').trim(), departments: [...new Set(Object.keys(r).filter((k) => /^(accessdepartment|departments?)\d*$/.test(k)).flatMap((k) => String(r[k] ?? '').split(/[,;\/]/)).map(fixDept).filter(Boolean))]
     })).filter((r) => r.name || r.employeeId);
     rows.forEach((r) => {
       if (r.departments.includes('All')) r.departments = ['All'];
+      // assigned area: match Master Data (any capitalisation), keep only what the level needs
+      r.scope = { dept: '', line: '', station: '' }; r.notes = [];
+      if (r.sd === '-') r.sd = ''; if (r.sl === '-') r.sl = ''; if (r.ss === '-') r.ss = '';
+      if (r.sd) {
+        const d = M.has ? masterDepts(M).find((x) => x.toLowerCase() === r.sd.toLowerCase()) : r.sd;
+        if (!d) r.notes.push(`Department “${r.sd}” is not in Master Data`);
+        else {
+          r.scope.dept = d;
+          if (r.sl && r.level <= 2) { const l = M.has ? masterLines(M, d).find((x) => x.toLowerCase() === r.sl.toLowerCase()) : r.sl; if (!l) r.notes.push(`Line “${r.sl}” is not in ${d}`); else { r.scope.line = l; if (r.ss && r.level === 0) { const st = M.has ? masterStationNames(M, d, l).find((x) => x.toLowerCase() === r.ss.toLowerCase()) : r.ss; if (!st) r.notes.push(`Station “${r.ss}” is not on ${l}`); else r.scope.station = st; } } }
+        }
+      }
+      if (r.reportsToId === '-') r.reportsToId = '';
       r.problem = !r.name ? 'Name missing' : !r.employeeId ? 'ID missing' : r.password.length < 6 ? 'Password under 6 characters'
         : !r.departments.length ? 'Department missing' : exist.has(r.employeeId) ? 'Already added' : '';
     });
     const todo = rows.filter((r) => !r.problem), skipped = rows.filter((r) => r.problem);
     const weak = todo.filter((r) => r.password === r.employeeId).length;
+    const noted = todo.filter((r) => r.notes.length);
 
     const m = openModal({
       title: 'Import users', wide: true,
       html: `<p>Found <b>${rows.length}</b> rows in sheet “${esc(parsed.sheet)}”: <b>${todo.length}</b> ready to create, <b>${skipped.length}</b> skipped.</p>
         <p class="hint">The password column is used once to create each login. It is not saved in the database. Delete it from the Excel file afterwards.</p>
         ${weak ? `<p class="hint"><b>${weak}</b> users have a password equal to their ID. They will be asked to change it at first sign-in. Users get the role in the Role column (User if blank).</p>` : ''}
+        ${noted.length ? `<p class="hint"><b>${noted.length}</b> users will be created without the assigned area that did not match Master Data: ${esc(noted.slice(0, 4).map((r) => r.name + ' (' + r.notes[0] + ')').join('; '))}${noted.length > 4 ? ' …' : ''}</p>` : ''}
         ${skipped.length ? `<table class="sum"><tr><th>Skipped</th><th>User ID</th><th>Reason</th></tr>${skipped.slice(0, 12).map((r) => `<tr><td>${esc(r.name)}</td><td>${esc(r.employeeId)}</td><td>${esc(r.problem)}</td></tr>`).join('')}</table>` : ''}
         <div class="prog" id="ip" hidden><i></i></div><div class="hint" id="it"></div><div class="err" id="ie"></div>`,
       actions: [
@@ -418,7 +496,7 @@
         const r = todo[i];
         txt.textContent = `Creating ${i + 1} of ${todo.length}: ${r.name}`;
         try {
-          state.users.push(await createUser({ employeeId: r.employeeId, name: r.name, password: r.password, departments: r.departments, userNo: r.userNo, level: r.level, role: r.role, pages: r.pages }));
+          state.users.push(await createUser({ employeeId: r.employeeId, name: r.name, password: r.password, departments: r.departments, userNo: r.userNo, level: r.level, role: r.role, pages: r.pages, scopeDept: r.scope.dept, scopeLine: r.scope.line, scopeStation: r.scope.station }));
           ok++;
         } catch (e) { fails.push(`${r.name} (${r.employeeId}): ${friendlyError(e)}`); }
         bar.firstElementChild.style.width = Math.round(((i + 1) / todo.length) * 100) + '%';
@@ -427,10 +505,11 @@
       for (const r of todo) {
         if (!r.reportsToId) continue;
         const me = state.users.find((z) => String(z.employeeId) === r.employeeId), boss = state.users.find((z) => String(z.employeeId) === r.reportsToId);
+        if (me && boss && lvOf(boss.level) !== lvOf(me.level) + 1) { fails.push(`${r.name}: reports-to ${r.reportsToId} ignored (must be exactly one level above)`); continue; }
         if (me && boss && me.uid !== boss.uid) { try { await updateUser(me.uid, { reportsTo: boss.uid }); me.reportsTo = boss.uid; } catch { /* ignore */ } }
       }
       x.locked = false; x.buttons.cancel.disabled = false; x.buttons.cancel.textContent = 'Close';
-      txt.textContent = `Done: ${ok} created, ${fails.length} failed.`;
+      txt.textContent = `Done: ${ok} created, ${fails.length} need attention.`;
       if (fails.length) x.el.querySelector('#ie').innerHTML = fails.slice(0, 8).map(esc).join('<br>');
       updateTiles(); drawUsers();
     }
@@ -1339,6 +1418,18 @@
   }
 
   /* ---------- Audit forms (separate module, loaded when the tab opens) ---------- */
+  window.addEventListener('wip-master', async () => { MST = await getMaster(); updateTiles(); });
+
+  async function renderMasterTab() {
+    panel.innerHTML = '<div class="empty">Loading master data…</div>';
+    try {
+      const m = await import('./js/master-admin.js');
+      if (state.tab !== 'master') return;
+      await m.renderMaster(panel);
+      MST = await getMaster(); updateTiles();
+    } catch (e) { panel.innerHTML = errorBox(e); }
+  }
+
   async function renderAuditTab() {
     panel.innerHTML = '<div class="empty">Loading audit forms…</div>';
     try {

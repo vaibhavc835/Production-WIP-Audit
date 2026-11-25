@@ -29,7 +29,7 @@
 <script type="module">
   import {
     startPage, icon, esc, toast, openModal, confirmBox, friendlyError,
-    listUsers, listColl, getIssueSetup, listIssues, listIssuesAtStation, createIssue, submitContainment, returnIssue, approveIssue, signoffIssue, updateIssue,
+    listUsers, listColl, listIssueStations, getIssueSetup, listIssues, listIssuesAtStation, createIssue, submitContainment, returnIssue, approveIssue, signoffIssue, updateIssue,
     buildRoute, repeatInfo, lvOf, issueRole, currentLevel, issueMs, issueNo, repeatKey, fmtDur, levelLabel, dayKeyOf, weekMonthOf, DEFAULT_LEAD
   } from './js/wip-core.js';
 
@@ -82,7 +82,7 @@
   const lc = (v) => clean(v).toLowerCase();
 
   async function loadAll() {
-    const [setup, users, resps, leads, stations, issues] = await Promise.all([getIssueSetup(), listUsers(), listColl('issueResp'), listColl('issueLead'), listColl('issueStations'), listIssues()]);
+    const [setup, users, resps, leads, stations, issues] = await Promise.all([getIssueSetup(), listUsers(), listColl('issueResp'), listColl('issueLead'), listIssueStations(), listIssues()]);
     Object.assign(D, { setup, users: users.map((u) => ({ ...u, level: lvOf(u.level) })), resps, leads, stations, issues });
   }
   async function reloadIssues() { D.issues = await listIssues(); }
