@@ -30,6 +30,7 @@
     startPage, icon, esc, toast, openModal, friendlyError,
     listStations, listColl, listAuditForms, listAuditResponses, submitAudit, dayKeyOf
   } from './js/wip-core.js';
+  import { renderSheet, sheetTableHtml } from './js/audit-sheet.js';
 
   const ctx = await startPage({ active: 'audit', title: 'Audit' });
   const main = ctx.main;
@@ -90,7 +91,7 @@
   async function showList() {
     root.innerHTML = `<div class="page-head"><div><h1>Audit</h1><p class="sub">Choose an audit form, fill it in on the shop floor and submit.</p></div>
       ${ctx.isAdmin ? '<a class="btn btn-ghost" href="admin.html#auditforms">Manage audit forms</a>' : ''}</div>
-      ${forms.length ? `<div class="forms">${forms.map((f) => `<button type="button" class="fcard" data-id="${esc(f.id)}"><b>${esc(f.title)}</b><span>${esc(f.description || '')}</span><span>${(f.points || []).length} audit points</span></button>`).join('')}</div>`
+      ${forms.length ? `<div class="forms">${forms.map((f) => `<button type="button" class="fcard" data-id="${esc(f.id)}"><b>${esc(f.title)}</b><span>${esc(f.description || '')}</span><span>${f.kind === 'sheet' ? (f.rowMode === 'free' ? 'Checksheet · add rows as you go' : 'Checksheet · ' + (f.rows || []).filter((x) => !x.g).length + ' check points') : (f.points || []).length + ' audit points'}</span></button>`).join('')}</div>`
         : `<div class="empty"><b>No audit form yet.</b><p>${ctx.isAdmin ? 'Create one in Admin Control, Audit Forms.' : 'The administrator has not created an audit form yet.'}</p></div>`}
       <h2 class="sec">Recent responses</h2><div id="recent"><div class="empty">Loading…</div></div>`;
     root.querySelectorAll('.fcard').forEach((b) => { b.onclick = () => { location.hash = 'form=' + b.dataset.id; }; });
@@ -107,6 +108,17 @@
 
   function detail(r) {
     if (!r) return;
+    if (r.kind === 'sheet') {
+      openModal({
+        title: r.formTitle, wide: true,
+        html: `<p class="hint">${esc(when(r))} · audit date ${esc(r.auditDate || '')}${r.department ? ' · ' + esc(r.department) + ' · ' + esc(r.line) : ''} · audited by ${esc(r.auditorName)}${r.auditorEmployeeId ? ' (' + esc(r.auditorEmployeeId) + ')' : ''}</p>
+          ${(r.headerValues || []).filter((h) => h.value).length ? `<p>${r.headerValues.filter((h) => h.value).map((h) => `<b>${esc(h.label)}:</b> ${esc(h.value)}`).join(' &nbsp; ')}</p>` : ''}
+          <p><span class="pill green">${r.counts?.ok ?? 0} OK</span> <span class="pill red">${r.counts?.nok ?? 0} NOT OK</span> ${r.score != null ? `<b style="margin-left:8px">Score ${r.score}%</b>` : ''}</p>
+          ${sheetTableHtml(r.cols || [], r.rows || [])}`,
+        actions: [{ label: 'Close', onClick: (x) => x.close() }]
+      });
+      return;
+    }
     openModal({
       title: r.formTitle, wide: true,
       html: `<p class="hint">${esc(when(r))} · ${esc(r.department)}${r.deptOther ? ' (other)' : ''} · ${esc(r.line)}${r.lineOther ? ' (other)' : ''} · audited by ${esc(r.auditorName)}${r.auditorEmployeeId ? ' (' + esc(r.auditorEmployeeId) + ')' : ''}</p>
@@ -118,7 +130,17 @@
   }
 
   /* ---------- fill a form ---------- */
+  function showSheet(f) {
+    root.innerHTML = '<div style="max-width:1200px;margin:0 auto"><a href="#" id="back" style="font-size:14px">← All audit forms</a><div id="sheetHost"></div></div>';
+    root.querySelector('#back').onclick = (e) => { e.preventDefault(); location.hash = ''; };
+    renderSheet(root.querySelector('#sheetHost'), f, { places, ctx, onSubmit: async (d) => {
+      await submitAudit({ formId: f.id, formTitle: f.title, ...d, auditorName: ctx.name, auditorEmployeeId: ctx.employeeId || '', dateKey: dayKeyOf(new Date()) });
+      done(f, d.counts, d.score, true);
+    } });
+  }
+
   function showForm(f) {
+    if (f.kind === 'sheet') return showSheet(f);
     const deptList = [...places.keys()].sort();
     const O = '__other__';
     root.innerHTML = `<div class="gf"><a href="#" id="back" style="font-size:14px">← All audit forms</a>
@@ -181,10 +203,10 @@
     };
   }
 
-  function done(f, counts, score) {
+  function done(f, counts, score, sheet) {
     window.scrollTo({ top: 0 });
     root.innerHTML = `<div class="gf"><div class="gc head"><h1>Response recorded</h1><p>Your response to <b>${esc(f.title)}</b> has been saved.</p>
-      <div class="big">${score != null ? score + '%' : '-'}</div><p><span class="pill green">${counts.ok} meet</span> <span class="pill red">${counts.nok} do not meet</span> <span class="pill grey">${counts.na} not applicable</span></p>
+      <div class="big">${score != null ? score + '%' : '-'}</div><p><span class="pill green">${counts.ok} ${sheet ? 'OK' : 'meet'}</span> <span class="pill red">${counts.nok} ${sheet ? 'NOT OK' : 'do not meet'}</span>${sheet ? '' : ` <span class="pill grey">${counts.na} not applicable</span>`}</p>
       <p style="margin-top:14px"><button type="button" class="btn btn-primary" id="again">Submit another response</button> <button type="button" class="btn btn-ghost" id="home">Back to all forms</button></p></div></div>`;
     root.querySelector('#again').onclick = () => showForm(f);
     root.querySelector('#home').onclick = () => { location.hash = ''; showList(); };
