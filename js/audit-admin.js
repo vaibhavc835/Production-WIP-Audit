@@ -4,6 +4,7 @@
    The admin builds audit forms (title, audit points with criteria). They appear on the Audit page.
    ===================================================================== */
 import { icon, esc, toast, openModal, confirmBox, friendlyError, listAuditForms, saveAuditForm, deleteAuditForm, listAuditResponses } from './wip-core.js';
+import { editSheet } from './audit-sheet-admin.js';
 
 const clean = (v) => String(v ?? '').replace(/[ \t]+/g, ' ').trim();
 const CSS = `
@@ -35,22 +36,26 @@ export async function renderAuditAdmin(panel, ctx) {
   /* ---------- list ---------- */
   function drawList() {
     panel.innerHTML = `<div class="afx"><div class="toolbar"><span class="hint">Forms you create here appear on the Audit page for all users.</span><span style="flex:1"></span>
-      <button type="button" class="btn btn-primary" id="fNew">${icon('plus')}<span>New audit form</span></button></div>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Form</th><th class="num">Audit points</th><th>Status</th><th></th></tr></thead><tbody>
-      ${forms.map((f) => `<tr><td data-label="Form"><b>${esc(f.title)}</b><br><small style="color:var(--muted)">${esc(f.description || '')}</small></td><td class="num" data-label="Points">${(f.points || []).length}</td>
+      <button type="button" class="btn btn-ghost" id="fImp">Import from Excel</button><button type="button" class="btn btn-ghost" id="fNew">${icon('plus')}<span>New simple checklist</span></button>
+      <button type="button" class="btn btn-primary" id="fSheet">${icon('plus')}<span>New checksheet</span></button></div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Form</th><th>Type</th><th class="num">Points / rows</th><th>Status</th><th></th></tr></thead><tbody>
+      ${forms.map((f) => `<tr><td data-label="Form"><b>${esc(f.title)}</b><br><small style="color:var(--muted)">${esc(f.description || '')}</small></td><td data-label="Type">${f.kind === 'sheet' ? 'Checksheet' : 'Simple checklist'}</td><td class="num" data-label="Points">${f.kind === 'sheet' ? (f.rowMode === 'free' ? 'Auditor adds rows' : (f.rows || []).filter((x) => !x.g).length) : (f.points || []).length}</td>
         <td data-label="Status"><span class="pill ${f.active === false ? '' : 'green'}">${f.active === false ? 'Hidden' : 'Shown on Audit page'}</span></td>
         <td class="acts-td"><div class="acts"><button type="button" class="btn btn-ghost btn-sm" data-e="${esc(f.id)}">${icon('edit')}<span>Edit</span></button>
           <button type="button" class="btn btn-ghost btn-sm" data-t="${esc(f.id)}">${f.active === false ? 'Show' : 'Hide'}</button>
           <button type="button" class="btn btn-ghost btn-sm" data-c="${esc(f.id)}">Duplicate</button>
           <button type="button" class="btn btn-ghost btn-sm" data-x="${esc(f.id)}">Responses Excel</button>
           <button type="button" class="btn btn-danger btn-sm" data-d="${esc(f.id)}" aria-label="Delete">${icon('trash')}</button></div></td></tr>`).join('')
-        || '<tr><td colspan="4"><div class="empty">No audit form yet. Select New audit form to create the first one.</div></td></tr>'}
+        || '<tr><td colspan="5"><div class="empty">No audit form yet. Select New checksheet, or import your Excel check sheets.</div></td></tr>'}
       </tbody></table></div></div>`;
     const find = (id) => forms.find((f) => f.id === id);
+    const sheetEd = (f) => editSheet(panel, f, { onClose: async (saved) => { if (saved) await reload(); drawList(); } });
     panel.querySelector('#fNew').onclick = () => edit(null);
-    panel.querySelectorAll('[data-e]').forEach((b) => { b.onclick = () => edit(find(b.dataset.e)); });
+    panel.querySelector('#fSheet').onclick = () => sheetEd(null);
+    panel.querySelector('#fImp').onclick = () => importDialog();
+    panel.querySelectorAll('[data-e]').forEach((b) => { b.onclick = () => { const f = find(b.dataset.e); if (f.kind === 'sheet') sheetEd(f); else edit(f); }; });
     panel.querySelectorAll('[data-t]').forEach((b) => { b.onclick = async () => { const f = find(b.dataset.t); try { await saveAuditForm(f.id, { active: f.active === false }); f.active = f.active === false; drawList(); } catch (e) { fail(e); } }; });
-    panel.querySelectorAll('[data-c]').forEach((b) => { b.onclick = async () => { const f = find(b.dataset.c); try { await saveAuditForm(null, { title: f.title + ' (copy)', description: f.description || '', points: f.points || [], active: false }); await reload(); drawList(); toast('Copied. The copy is hidden until you show it.'); } catch (e) { fail(e); } }; });
+    panel.querySelectorAll('[data-c]').forEach((b) => { b.onclick = async () => { const f = find(b.dataset.c); try { const { id: _i, createdAt: _c, updatedAt: _u, createdBy: _b, ...rest } = f; await saveAuditForm(null, { ...rest, title: f.title + ' (copy)', active: false }); await reload(); drawList(); toast('Copied. The copy is hidden until you show it.'); } catch (e) { fail(e); } }; });
     panel.querySelectorAll('[data-x]').forEach((b) => { b.onclick = () => exportResponses(find(b.dataset.x), b); });
     panel.querySelectorAll('[data-d]').forEach((b) => { b.onclick = async () => {
       const f = find(b.dataset.d);
@@ -66,6 +71,7 @@ export async function renderAuditAdmin(panel, ctx) {
       if (!rows.length) { toast('This form has no responses yet.'); return; }
       const X = await loadXLSX();
       const dt = (r) => { const d = r.createdAt?.toDate?.(); return d ? [`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`, `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`] : ['', '']; };
+      if (f.kind === 'sheet') { await exportSheetResponses(f, rows, X, dt); return; }
       const R = { ok: 'Meets criteria', nok: 'Does not meet', na: 'Not applicable' };
       const sum = [['Date', 'Time', 'Audit form', 'Department', 'Line', 'Audited by', 'Employee ID', 'Audit points', 'Meets', 'Does not meet', 'Not applicable', 'Score %']];
       const det = [['Date', 'Time', 'Audit form', 'Department', 'Line', 'Audited by', 'Employee ID', 'No.', 'Audit point', 'Criteria', 'Observation', 'Remark']];
@@ -80,6 +86,66 @@ export async function renderAuditAdmin(panel, ctx) {
       X.writeFile(wb, `Audit_${String(f.title).replace(/[^A-Za-z0-9]+/g, '-')}.xlsx`);
     } catch (e) { toast(e.message || friendlyError(e)); }
     btn.disabled = false;
+  }
+
+  async function exportSheetResponses(f, rows, X, dt) {
+    const cols = []; const seen = new Set();
+    rows.slice().reverse().forEach((r) => (r.cols || []).forEach((c) => { if (!seen.has(c.id)) { seen.add(c.id); cols.push(c); } }));
+    const hf = []; const hs = new Set(); rows.forEach((r) => (r.headerValues || []).forEach((h) => { if (!hs.has(h.id)) { hs.add(h.id); hf.push(h); } }));
+    const sum = [['Date', 'Time', 'Audit date', 'Audit form', 'Department', 'Line', ...hf.map((h) => h.label), 'Audited by', 'Employee ID', 'OK', 'NOT OK', 'Score %']];
+    const det = [['Date', 'Time', 'Audit date', 'Audit form', 'Department', 'Line', ...hf.map((h) => h.label), 'Audited by', 'Employee ID', 'Group', ...cols.map((c) => c.label)]];
+    rows.slice().reverse().forEach((r) => {
+      const [d, t] = dt(r), hv = hf.map((h) => (r.headerValues || []).find((x) => x.id === h.id)?.value || '');
+      sum.push([d, t, r.auditDate || '', r.formTitle, r.department, r.line, ...hv, r.auditorName, r.auditorEmployeeId || '', r.counts?.ok ?? '', r.counts?.nok ?? '', r.score ?? '']);
+      let grp = '';
+      (r.rows || []).forEach((x) => {
+        if (x.g) { grp = x.label; return; }
+        det.push([d, t, r.auditDate || '', r.formTitle, r.department, r.line, ...hv, r.auditorName, r.auditorEmployeeId || '', grp, ...cols.map((c) => (c.kind === 'entry' ? x.e?.[c.id] : x.f?.[c.id]) ?? '')]);
+      });
+    });
+    const w1 = X.utils.aoa_to_sheet(sum), w2 = X.utils.aoa_to_sheet(det);
+    w1['!cols'] = sum[0].map((h) => ({ wch: Math.max(10, Math.min(30, String(h).length + 4)) })); w2['!cols'] = det[0].map((h) => ({ wch: Math.max(10, Math.min(36, String(h).length + 4)) }));
+    const wb = X.utils.book_new(); X.utils.book_append_sheet(wb, w1, 'Responses'); X.utils.book_append_sheet(wb, w2, 'Details');
+    X.writeFile(wb, `Audit_${String(f.title).replace(/[^A-Za-z0-9]+/g, '-')}.xlsx`);
+  }
+
+  /* ---------- import Excel check sheets ---------- */
+  function importDialog() {
+    const m = openModal({
+      title: 'Import check sheets from Excel', wide: true,
+      html: `<p class="hint">Choose your Excel file. Each worksheet becomes one form: <b>yellow cells are filled in by the auditor</b>, all other cells stay fixed text. Images are not used. You can edit every form afterwards.</p>
+        <input type="file" id="imf" accept=".xlsx"><div id="imr" style="margin-top:12px"></div><div class="err" id="ime" style="color:#b91c1c"></div>`,
+      actions: [{ label: 'Close', onClick: (x) => x.close() }, { label: 'Import selected forms', kind: 'primary', id: 'imgo', onClick: (x, b) => doImport(x, b) }]
+    });
+    let parsed = [];
+    const box = m.el.querySelector('#imr'), err = m.el.querySelector('#ime');
+    m.el.querySelector('#imf').onchange = async (e) => {
+      const file = e.target.files[0]; if (!file) return;
+      err.textContent = ''; box.innerHTML = '<div class="empty">Reading the file…</div>'; parsed = [];
+      try {
+        const { parseChecksheetWorkbook } = await import('./audit-import.js');
+        parsed = await parseChecksheetWorkbook(await file.arrayBuffer());
+        const titles = new Set(forms.map((f) => String(f.title).toLowerCase())), seen = new Set();
+        parsed.forEach((p) => { if (p.error) return; const k = p.title.toLowerCase(); p.dup = titles.has(k) || seen.has(k); seen.add(k); p.pick = !p.dup; });
+        if (!parsed.length) { box.innerHTML = '<div class="empty">No check sheet found. A sheet needs yellow cells under a heading row.</div>'; return; }
+        box.innerHTML = `<div class="tbl-wrap"><table class="tbl"><thead><tr><th></th><th>Worksheet</th><th>Form title</th><th class="num">Rows</th><th>Yellow columns</th></tr></thead><tbody>${parsed.map((p, i) => p.error
+          ? `<tr><td></td><td colspan="4" style="color:#b91c1c">${esc(p.error)}</td></tr>`
+          : `<tr><td><input type="checkbox" data-i="${i}" ${p.pick ? 'checked' : ''} aria-label="Import ${esc(p.sheetName)}" style="width:auto"></td><td data-label="Worksheet">${esc(p.sheetName)}${p.dup ? '<br><small style="color:#92400e">Same title already exists</small>' : ''}</td>
+          <td data-label="Title"><input data-t="${i}" style="min-width:260px" value="${esc(p.title)}" maxlength="140"></td><td class="num" data-label="Rows">${p.rowMode === 'free' ? 'auditor adds' : p.rows.filter((r) => !r.g).length}</td>
+          <td data-label="Yellow columns">${esc(p.columns.filter((c) => c.kind === 'entry').map((c) => c.label).join(', '))}</td></tr>`).join('')}</tbody></table></div>`;
+        box.querySelectorAll('[data-i]').forEach((c) => { c.onchange = () => { parsed[+c.dataset.i].pick = c.checked; }; });
+        box.querySelectorAll('[data-t]').forEach((c) => { c.oninput = () => { parsed[+c.dataset.t].title = c.value; }; });
+      } catch (ex) { box.innerHTML = ''; err.textContent = ex.message || friendlyError(ex); }
+    };
+    async function doImport(x, btn) {
+      const sel = parsed.filter((p) => !p.error && p.pick && clean(p.title));
+      if (!sel.length) { err.textContent = 'Select at least one worksheet.'; return; }
+      btn.disabled = true;
+      try {
+        for (const p of sel) { const { pick, dup, sheetName, ...doc } = p; await saveAuditForm(null, { ...doc, title: clean(p.title), active: true }); }
+        await reload(); x.close(); drawList(); toast(`${sel.length} form${sel.length === 1 ? '' : 's'} imported.`);
+      } catch (ex) { err.textContent = friendlyError(ex); btn.disabled = false; }
+    }
   }
 
   /* ---------- editor ---------- */
