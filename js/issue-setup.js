@@ -5,7 +5,7 @@
    ===================================================================== */
 import {
   icon, esc, toast, openModal, confirmBox, friendlyError, slug,
-  listUsers, listStations, ORG_LEVELS, levelLabel, FIELD_DEFS, DEFAULT_LEAD,
+  listUsers, listStations, ORG_LEVELS, levelLabel, lvOf, FIELD_DEFS, DEFAULT_LEAD,
   getIssueSetup, saveIssueSetup, listColl, saveColl, deleteColl, writeColl, deleteColls,
   listIssues, buildRoute, pickLead, tsFromDate, dayKeyOf, weekMonthOf, orgChain
 } from './wip-core.js';
@@ -42,7 +42,7 @@ const CSS = `
 .isx .node{display:inline-flex;gap:8px;align-items:center;padding:6px 12px;border:1px solid var(--line);border-radius:10px;background:#fff}
 .isx .node small{color:var(--muted)}
 .isx .lv{font-size:11.5px;font-weight:700;padding:1px 8px;border-radius:999px;background:#e0f2fe;color:#075985}
-.isx .lv.l5{background:#fee2e2;color:#991b1b}.isx .lv.l4{background:#fef3c7;color:#92400e}.isx .lv.l3{background:#ede9fe;color:#5b21b6}.isx .lv.l2{background:#dcfce7;color:#166534}
+.isx .lv.l0{background:#e0f2fe;color:#075985}.isx .lv.l5{background:#fee2e2;color:#991b1b}.isx .lv.l4{background:#fef3c7;color:#92400e}.isx .lv.l3{background:#ede9fe;color:#5b21b6}.isx .lv.l2{background:#dcfce7;color:#166534}
 .isx textarea.list{min-height:150px;font-size:14px}
 .isx .lists{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
 .isx .chips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
@@ -62,7 +62,7 @@ export async function renderIssueSetup(panel, ctx) {
   const reload = async (...keys) => {
     const all = !keys.length, want = (k) => all || keys.includes(k);
     const jobs = [];
-    if (want('users')) jobs.push(listUsers().then((u) => { D.users = u.map((x) => ({ ...x, level: Number(x.level) || 1 })).sort((a, b) => String(a.name).localeCompare(String(b.name))); }));
+    if (want('users')) jobs.push(listUsers().then((u) => { D.users = u.map((x) => ({ ...x, level: lvOf(x.level) })).sort((a, b) => String(a.name).localeCompare(String(b.name))); }));
     if (want('setup')) jobs.push(getIssueSetup().then((s) => { D.setup = s; }));
     if (want('stations')) jobs.push(listColl('issueStations').then((r) => { D.stations = r; }));
     if (want('resp')) jobs.push(listColl('issueResp').then((r) => { D.resp = r; }));
@@ -95,7 +95,7 @@ export async function renderIssueSetup(panel, ctx) {
     const loose = (kids.get('') || []).filter((u) => u.level < 2).sort(sortU);
     body.innerHTML = `<div class="pad"><p class="help">The organization chart is built from <b>Level</b> and <b>Reports to</b> on each user (Admin Control, User Database). Escalation follows this chart: a responsible user's Level 2 is their manager, Level 3 the manager's superior, and so on. Approval of a containment goes to the initiator's manager.</p>
       ${top.length ? `<ul class="tree">${top.map(node).join('')}</ul>` : '<div class="empty">No managers yet. Edit users in User Database and set their level and who they report to.</div>'}
-      ${loose.length ? `<h3 style="margin:22px 0 8px;font-size:15px">Level 1 users not placed under anyone <span class="path">(${loose.length})</span></h3><div class="chips">${loose.map((u) => `<span class="chip2">${esc(u.name)}</span>`).join('')}</div><p class="hint">Edit each user and set Reports to, otherwise issues for them cannot escalate.</p>` : ''}</div>`;
+      ${loose.length ? `<h3 style="margin:22px 0 8px;font-size:15px">Level 0 and Level 1 users not placed under anyone <span class="path">(${loose.length})</span></h3><div class="chips">${loose.map((u) => `<span class="chip2">${esc(u.name)}</span>`).join('')}</div><p class="hint">Edit each user and set Reports to, otherwise issues for them cannot escalate.</p>` : ''}</div>`;
   }
 
   /* ---------------- 2. Lists ---------------- */
@@ -220,7 +220,7 @@ export async function renderIssueSetup(panel, ctx) {
     body.innerHTML = `<div class="toolbar"><select id="rd" aria-label="Department"><option value="">All departments</option>${D.setup.respDepts.map((d) => `<option>${esc(d)}</option>`).join('')}</select><span style="flex:1"></span>
       <button type="button" class="btn btn-primary" id="rAdd">${icon('plus')}<span>Add responsibility</span></button></div>
       <p class="help" style="padding:12px 16px 0">For each responsible department and issue category, choose the Level 1 users who act on the issue. The first user is the primary. Levels 2 to 5 come from the organization chart.</p>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Responsible department</th><th>Category</th><th>Responsible users (Level 1)</th><th>Escalation path</th><th></th></tr></thead><tbody id="rb"></tbody></table></div><div class="note" id="rn"></div>`;
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Responsible department</th><th>Category</th><th>Responsible users (Level 1)</th><th>Initiator picks user</th><th>Escalation path</th><th></th></tr></thead><tbody id="rb"></tbody></table></div><div class="note" id="rn"></div>`;
     const draw = () => {
       const d = body.querySelector('#rd').value;
       const list = D.resp.filter((r) => !d || r.department === d).sort((a, b) => a.department.localeCompare(b.department) || String(a.category).localeCompare(String(b.category)));
@@ -228,10 +228,10 @@ export async function renderIssueSetup(panel, ctx) {
         const first = r.userUids?.[0], chain = first ? orgChain(D.users, first) : [];
         const path = first ? (chain.length ? chain.map((c) => `${esc(c.name)}`).join(' → ') : '<span class="warn">No superior set for the first user</span>') : '<span class="warn">No user</span>';
         return `<tr><td data-label="Department"><b>${esc(r.department)}</b></td><td data-label="Category">${r.category && r.category !== '*' ? esc(r.category) : 'All categories'}</td>
-          <td data-label="Users">${(r.userUids || []).map((u, i) => `${i ? ', ' : ''}${esc(userName(u) || '(removed)')}${i ? '' : ' ★'}`).join('') || '-'}</td><td data-label="Escalation" class="path">${path}</td>
+          <td data-label="Users">${(r.userUids || []).map((u, i) => `${i ? ', ' : ''}${esc(userName(u) || '(removed)')}${i ? '' : ' ★'}`).join('') || '-'}</td><td data-label="Initiator picks user">${r.pick ? 'Yes' : 'No, primary user'}</td><td data-label="Escalation" class="path">${path}</td>
           <td class="acts-td"><div class="acts"><button type="button" class="btn btn-ghost btn-sm" data-e="${esc(r.id)}">${icon('edit')}<span>Edit</span></button>
           <button type="button" class="btn btn-danger btn-sm" data-d="${esc(r.id)}" aria-label="Delete">${icon('trash')}</button></div></td></tr>`;
-      }).join('') || '<tr><td colspan="5"><div class="empty">No responsibility set yet. Add one for each department.</div></td></tr>';
+      }).join('') || '<tr><td colspan="6"><div class="empty">No responsibility set yet. Add one for each department.</div></td></tr>';
       body.querySelector('#rn').textContent = `${list.length} of ${D.resp.length} rows. A specific category overrides "All categories" for the same department.`;
       body.querySelectorAll('[data-e]').forEach((b) => { b.onclick = () => respDlg(D.resp.find((r) => r.id === b.dataset.e)); });
       body.querySelectorAll('[data-d]').forEach((b) => { b.onclick = async () => {
@@ -250,13 +250,14 @@ export async function renderIssueSetup(panel, ctx) {
         <div><label class="l" for="r_d">Responsible department</label><select id="r_d" ${r ? 'disabled' : ''}>${D.setup.respDepts.map((d) => `<option ${d === r?.department ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></div>
         <div><label class="l" for="r_c">Issue category</label><select id="r_c" ${r ? 'disabled' : ''}><option value="*">All categories</option>${D.setup.categories.map((c) => `<option ${c === r?.category ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>
         <div class="full"><label class="l">Responsible users (Level 1). ★ is the primary user.</label><div class="chips" id="r_chips"></div>
-        <select id="r_add"></select></div></form><div class="err" id="r_err"></div>`,
+        <select id="r_add"></select></div>
+        <div class="full"><label style="display:flex;gap:8px;align-items:flex-start;font-weight:500"><input type="checkbox" id="r_pick" style="width:auto;margin-top:3px" ${r?.pick ? 'checked' : ''}><span>Let the person raising the issue choose which of these users is responsible. Otherwise the primary user (★) is used. Everyone listed can still add the containment action.</span></label></div></form><div class="err" id="r_err"></div>`,
       actions: [{ label: 'Cancel', onClick: (x) => x.close() }, { label: 'Save', kind: 'primary', onClick: save }]
     });
     const $ = (id) => m.el.querySelector('#' + id);
     const paint = () => {
       $('r_chips').innerHTML = sel.map((u, i) => `<span class="chip2 ${i ? '' : 'pri'}">${esc(userName(u) || '(removed)')}${i ? `<button type="button" data-p="${esc(u)}" title="Make primary">★</button>` : ' ★'}<button type="button" data-x="${esc(u)}" aria-label="Remove">✕</button></span>`).join('') || '<span class="hint">No user chosen yet.</span>';
-      $('r_add').innerHTML = '<option value="">Add a user…</option>' + D.users.filter((u) => u.active !== false && !sel.includes(u.uid)).map((u) => `<option value="${esc(u.uid)}">${esc(u.name)} (${esc(u.employeeId || '')}, ${esc(levelLabel(u.level))})</option>`).join('');
+      $('r_add').innerHTML = '<option value="">Add a user…</option>' + D.users.filter((u) => u.active !== false && u.level >= 1 && !sel.includes(u.uid)).map((u) => `<option value="${esc(u.uid)}">${esc(u.name)} (${esc(u.employeeId || '')}, ${esc(levelLabel(u.level))})</option>`).join('');
       $('r_chips').querySelectorAll('[data-p]').forEach((b) => { b.onclick = () => { sel = [b.dataset.p, ...sel.filter((x) => x !== b.dataset.p)]; paint(); }; });
       $('r_chips').querySelectorAll('[data-x]').forEach((b) => { b.onclick = () => { sel = sel.filter((x) => x !== b.dataset.x); paint(); }; });
     };
@@ -269,7 +270,7 @@ export async function renderIssueSetup(panel, ctx) {
       if (!r && D.resp.some((z) => z.id === id)) { $('r_err').textContent = 'This department and category already has a row. Edit that row instead.'; return; }
       btn.disabled = true; x.locked = true;
       try {
-        const data = { department, category, userUids: sel };
+        const data = { department, category, userUids: sel, pick: $('r_pick').checked };
         await saveColl('issueResp', id, data);
         if (r) Object.assign(r, data); else D.resp.push({ id, ...data });
         x.locked = false; x.close(); drawResp(); toast('Saved.');

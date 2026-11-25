@@ -671,7 +671,7 @@ export async function createUser({ employeeId, name, password, role = 'user', de
   try { await signOut(a2); } catch { /* ignore */ }
   const profile = {
     name, employeeId: String(employeeId).trim(), email, role, departments,
-    active: true, mustChangePassword, userNo, level: Number(level) || 1, pages: Array.isArray(pages) ? pages : null, reportsTo: reportsTo || ''
+    active: true, mustChangePassword, userNo, level: lvOf(level), pages: Array.isArray(pages) ? pages : null, reportsTo: reportsTo || ''
   };
   await setDoc(doc(db, 'users', uid), { ...profile, createdAt: serverTimestamp(), createdBy: auth.currentUser.uid });
   if (mustChangePassword || STORE_PASSWORDS_FOR_TESTING) { try { await saveTempPassword(uid, password); } catch { /* not critical */ } }
@@ -876,10 +876,12 @@ export async function deleteInventoryChecksBulk(ids, onProgress) {
    Issue Report: organisation, masters, routing, workflow
    ===================================================================== */
 export const ORG_LEVELS = [
-  { n: 1, label: 'Level 1 (Engineer)' }, { n: 2, label: 'Level 2 (Manager)' }, { n: 3, label: 'Level 3 (HOD)' },
+  { n: 0, label: 'Level 0 (Workman)' }, { n: 1, label: 'Level 1 (Engineer)' }, { n: 2, label: 'Level 2 (Manager)' }, { n: 3, label: 'Level 3 (HOD)' },
   { n: 4, label: 'Level 4 (GM)' }, { n: 5, label: 'Level 5 (MD)' }
 ];
-export const levelLabel = (n) => (ORG_LEVELS.find((l) => l.n === Number(n)) || ORG_LEVELS[0]).label;
+// A user's level as a number from 0 (workman) to 5 (MD). Missing or invalid values count as Level 1.
+export const lvOf = (n) => { const v = Number(n); return n !== '' && n != null && Number.isInteger(v) && v >= 0 && v <= 5 ? v : 1; };
+export const levelLabel = (n) => (ORG_LEVELS.find((l) => l.n === lvOf(n))).label;
 
 // Which step of the issue form asks for which field. "locked" fields cannot be moved to another step.
 export const FIELD_DEFS = [
@@ -965,7 +967,7 @@ export function orgChain(users, uid) {
   while (cur && cur.reportsTo && by.has(cur.reportsTo) && !seen.has(cur.reportsTo)) { cur = by.get(cur.reportsTo); seen.add(cur.uid); out.push(cur); }
   return out;                                               // nearest superior first
 }
-export const tierUser = (users, uid, k) => orgChain(users, uid).find((a) => Number(a.level || 1) >= k && a.active !== false) || null;
+export const tierUser = (users, uid, k) => orgChain(users, uid).find((a) => lvOf(a.level) >= k && a.active !== false) || null;
 
 /* ----- routing: who is responsible, who is above them, how long each step may take ----- */
 const isAny = (c) => !c || c === '*';
@@ -976,16 +978,21 @@ export function pickLead(leads, dept, cat) {
     || leads.find((x) => isAny(x.department) && x.category === cat) || leads.find((x) => isAny(x.department) && isAny(x.category));
   return { target: Number(r?.target ?? DEFAULT_LEAD.target), t3: Number(r?.t3 ?? DEFAULT_LEAD.t3), t4: Number(r?.t4 ?? DEFAULT_LEAD.t4), t5: Number(r?.t5 ?? DEFAULT_LEAD.t5), custom: !!r };
 }
-export function buildRoute({ users, resps, leads, respDept, category, initiatorUid }) {
+export function buildRoute({ users, resps, leads, respDept, category, initiatorUid, chosenUid = '' }) {
   const r = pickResp(resps, respDept, category);
-  const uids = (r?.userUids || []).filter((u) => users.some((x) => x.uid === u && x.active !== false));
+  let uids = (r?.userUids || []).filter((u) => users.some((x) => x.uid === u && x.active !== false));
+  const canPick = !!r?.pick && uids.length > 1;
+  if (canPick && chosenUid && uids.includes(chosenUid)) uids = [chosenUid, ...uids.filter((u) => u !== chosenUid)];
   const primary = uids[0] || null;
   const tiers = { l2: null, l3: null, l4: null, l5: null };
   if (primary) [2, 3, 4, 5].forEach((k) => { tiers['l' + k] = tierUser(users, primary, k)?.uid || null; });
   // The initiator approves (mandatory). Their manager, HOD and GM may also approve, but it is not required.
   const optTiers = { l2: null, l3: null, l4: null };
   if (initiatorUid) [2, 3, 4].forEach((k) => { optTiers['l' + k] = tierUser(users, initiatorUid, k)?.uid || null; });
-  return { responsibleUids: uids, primaryUid: primary, tiers, lead: pickLead(leads, respDept, category), approverUid: initiatorUid || null, optTiers };
+  // The initiator approves. A workman (Level 0) cannot approve, so the nearest superior of Level 1 or above does.
+  const ini = users.find((u) => u.uid === initiatorUid);
+  const approverUid = !initiatorUid ? null : (ini && lvOf(ini.level) === 0 ? (tierUser(users, initiatorUid, 1)?.uid || initiatorUid) : initiatorUid);
+  return { responsibleUids: uids, primaryUid: primary, tiers, lead: pickLead(leads, respDept, category), approverUid, optTiers, canPick, pickUids: canPick ? (r.userUids || []).filter((u) => users.some((x) => x.uid === u && x.active !== false)) : [] };
 }
 
 /* ----- dates and ids ----- */
@@ -1053,7 +1060,16 @@ export async function submitContainment(issue, actor, vals, setup = {}) {
   const opt = [O.l2, dt > Number(ap.hodHours) ? O.l3 : null, dt > Number(ap.gmHours) ? O.l4 : null]
     .filter((u) => u && u !== issue.initiatorUid && u !== actor.uid);
   const hoursTotal = Math.round(mp * (mc > 0 ? mc : 1) * dt * 100) / 100;
+  // Optional corrected loss when the response was late. The system downtime above is never changed.
+  let corr = {};
+  if (vals.correctedLossH !== undefined && vals.correctedLossH !== null && vals.correctedLossH !== '') {
+    const cl = Number(vals.correctedLossH), why = String(vals.correctedReason || '').trim();
+    if (!(cl >= 0)) throw new Error('Enter the corrected loss as hours (0 or more).');
+    if (!why) throw new Error('Write the reason for the corrected loss.');
+    corr = { lossCorrectedH: Math.round(cl * 100) / 100, lossCorrectedCost: Math.round(cl * rate), lossCorrectedReason: why, lossCorrectedBy: actor.name };
+  }
   const data = {
+    lossCorrectedH: null, lossCorrectedCost: null, lossCorrectedReason: '', lossCorrectedBy: '', ...corr,
     status: 'pending', containment: String(vals.containment || '').trim(), containmentBy: { uid: actor.uid, name: actor.name, employeeId: actor.employeeId },
     escalationLevel: Number(actor.level) || 1, delayMin, leadResult: delayMin >= target ? 'Not Achieved' : 'Achieved',
     mp, mc, downtimeH: dt, hoursTotal, mhCost: Math.round(hoursTotal * rate), containmentAt: serverTimestamp(),
@@ -1067,8 +1083,17 @@ export async function returnIssue(issue, actor, note) {
   await updateIssue(issue.id, {
     status: 'open', returnCount: (issue.returnCount || 0) + 1, returnNote: String(note || '').trim(),
     prevContainments: [...(issue.prevContainments || []), { text: issue.containment || '', by: issue.containmentBy?.name || '', returnedBy: actor.name }],
-    containment: '', containmentAt: null, optApprovalUids: [], signoffs: []
+    containment: '', containmentAt: null, optApprovalUids: [], signoffs: [], lossCorrectedH: null, lossCorrectedCost: null, lossCorrectedReason: '', lossCorrectedBy: ''
   });
+}
+// Live repeat information for one issue: how many other issues share its station and category inside the PSM window
+export function repeatInfo(issue, list, windowDays = 90, now = Date.now()) {
+  const key = repeatKey(issue), win = (Number(windowDays) || 90) * 86400000, t0 = issueMs(issue);
+  const same = list.filter((x) => x.id !== issue.id && repeatKey(x) === key && now - issueMs(x) <= win);
+  const earlier = same.filter((x) => issueMs(x) < t0 || !t0).length;
+  const loss = Math.round(same.reduce((a, x) => a + (Number(x.hoursTotal) || 0), 0) * 10) / 10;
+  const last = same.reduce((m, x) => Math.max(m, issueMs(x)), 0);
+  return { others: same.length, earlier, total: same.length + 1, loss, last, windowDays: Number(windowDays) || 90, repeated: same.length > 0 };
 }
 // Repeat count and loss for one issue's station, used to decide a PSM referral
 export function psmCheck(issue, sameStation, psm, now = Date.now()) {
