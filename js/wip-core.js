@@ -656,13 +656,19 @@ export async function listUsers() {
   const s = await getDocs(collection(db, 'users'));
   return s.docs.map((d) => ({ uid: d.id, ...d.data() }));
 }
+// Where a user works, by level: Level 0 = a station, Level 1 and 2 = a line, Level 3 to 5 = a department. All optional.
+export function scopeOf(level, { dept = '', line = '', station = '' } = {}) {
+  const lv = lvOf(level);
+  return { scopeDept: dept || '', scopeLine: lv <= 2 ? (line || '') : '', scopeStation: lv === 0 ? (station || '') : '' };
+}
+export const scopeLabel = (u) => [u.scopeDept, u.scopeLine, u.scopeStation].filter(Boolean).join(' › ');
 export async function updateUser(uid, data) {
   await updateDoc(doc(db, 'users', uid), { ...data, updatedAt: serverTimestamp() });
 }
 
 let secondary = null;
 // Creates the login with a second app instance so the admin stays signed in.
-export async function createUser({ employeeId, name, password, role = 'user', departments = [], userNo = null, mustChangePassword = true, level = 1, pages = null, reportsTo = '' }) {
+export async function createUser({ employeeId, name, password, role = 'user', departments = [], userNo = null, mustChangePassword = true, level = 1, pages = null, reportsTo = '', scopeDept = '', scopeLine = '', scopeStation = '' }) {
   if (!secondary) secondary = initializeApp(app.options, 'wip-secondary');
   const a2 = getAuth(secondary);
   const email = idToEmail(employeeId);
@@ -671,7 +677,7 @@ export async function createUser({ employeeId, name, password, role = 'user', de
   try { await signOut(a2); } catch { /* ignore */ }
   const profile = {
     name, employeeId: String(employeeId).trim(), email, role, departments,
-    active: true, mustChangePassword, userNo, level: lvOf(level), pages: Array.isArray(pages) ? pages : null, reportsTo: reportsTo || ''
+    active: true, mustChangePassword, userNo, level: lvOf(level), pages: Array.isArray(pages) ? pages : null, reportsTo: reportsTo || '', ...scopeOf(level, { dept: scopeDept, line: scopeLine, station: scopeStation })
   };
   await setDoc(doc(db, 'users', uid), { ...profile, createdAt: serverTimestamp(), createdBy: auth.currentUser.uid });
   if (mustChangePassword || STORE_PASSWORDS_FOR_TESTING) { try { await saveTempPassword(uid, password); } catch { /* not critical */ } }
@@ -690,6 +696,70 @@ export async function listStationsByDepartment(dept) {
   const s = await getDocs(query(collection(db, 'inventory'), where('department', '==', dept)));
   return s.docs.map((d) => ({ id: d.id, ...d.data() }))
     .sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || String(a.stationName).localeCompare(String(b.stationName)));
+}
+
+
+/* ---------- Master data: departments, lines, stations (one list for every page) ---------- */
+// One document, config/master:  stations [{ id, dept, line, lineCode, station, nWork, issue, imp, audit }]
+//                               inv      [{ id, dept, line, group, name, min, max }]   (inventory points)
+let _master = null;
+export async function getMaster(force = false) {
+  if (_master && !force) return _master;
+  let d = {};
+  try { const sn = await getDoc(doc(db, 'config', 'master')); d = sn.exists() ? sn.data() : {}; } catch { /* no master yet */ }
+  _master = { stations: Array.isArray(d.stations) ? d.stations : [], inv: Array.isArray(d.inv) ? d.inv : [], updatedMs: d.updatedMs || 0 };
+  _master.has = _master.stations.length > 0;
+  applyMasterDepartments(_master);
+  return _master;
+}
+// The inventory access list (tick boxes on the user form, Inventory page) follows the departments that have inventory points
+function applyMasterDepartments(m) {
+  const depts = [...new Set((m.inv || []).map((x) => x.dept))];
+  if (depts.length) DEPARTMENTS.splice(0, DEPARTMENTS.length, 'All', ...depts);
+}
+export async function saveMaster({ stations, inv }, { syncInv = true } = {}) {
+  await setDoc(doc(db, 'config', 'master'), { stations, inv, updatedAt: serverTimestamp(), updatedMs: Date.now() });
+  _master = { stations, inv, updatedMs: Date.now(), has: stations.length > 0 };
+  applyMasterDepartments(_master);
+  if (syncInv) await syncInventoryFromMaster(_master);
+  return _master;
+}
+const uniqBy = (arr, f) => { const seen = new Set(), out = []; arr.forEach((x) => { const k = f(x); if (!seen.has(k)) { seen.add(k); out.push(x); } }); return out; };
+const flagOK = (st, flag) => !flag || st[flag];
+export const masterDepts = (m, flag) => [...new Set(m.stations.filter((x) => flagOK(x, flag)).map((x) => x.dept))];
+export const masterLines = (m, dept, flag) => [...new Set(m.stations.filter((x) => x.dept === dept && flagOK(x, flag)).map((x) => x.line))];
+export const masterStationNames = (m, dept, line, flag) => [...new Set(m.stations.filter((x) => x.dept === dept && x.line === line && x.station && flagOK(x, flag)).map((x) => x.station))];
+// Issue form: a line without stations is itself the place, so its name is used as the station
+export function issueStationsFromMaster(m) {
+  return uniqBy(m.stations.filter((x) => x.issue).map((x) => ({ area: x.dept, line: x.line, station: x.station || x.line })), (x) => [x.area, x.line, x.station].join('|'))
+    .map((x) => ({ id: slug([x.area, x.line, x.station].join('|')), ...x }));
+}
+export function improvementFromMaster(m) {
+  const rows = m.stations.filter((x) => x.imp);
+  const lines = uniqBy(rows, (x) => x.dept + '|' + x.line).map((x) => ({ dept: x.dept, line: x.line, code: x.lineCode || '' }));
+  const stations = uniqBy(rows.filter((x) => x.station), (x) => [x.dept, x.line, x.station].join('|')).map((x) => ({ dept: x.dept, line: x.line, name: x.station }));
+  return { lines, stations };
+}
+export function auditPlacesFromMaster(m) {
+  const places = new Map();
+  m.stations.filter((x) => x.audit).forEach((x) => { if (!places.has(x.dept)) places.set(x.dept, new Set()); places.get(x.dept).add(x.line); });
+  return places;
+}
+// Inventory points become the documents of the inventory collection (what the Inventory page and the exports read)
+export function inventoryFromMaster(m) {
+  const used = new Map(), out = [];
+  (m.inv || []).forEach((p, i) => {
+    const base = p.group && p.group !== p.name ? `${p.name} (${p.group})` : p.name;
+    const k = [p.dept, p.line, base].join('|'); const n = (used.get(k) || 0) + 1; used.set(k, n);
+    const stationName = n > 1 ? `${base} ${n}` : base;
+    const d = { department: p.dept, line: p.line, stationCode: '', stationName, point: p.name, group: p.group || '', min: Number(p.min) || 0, max: Number(p.max) || 0, order: i + 1 };
+    out.push({ id: stationId(d), ...d });
+  });
+  return out;
+}
+export async function syncInventoryFromMaster(m) {
+  const list = inventoryFromMaster(m);
+  return writeStations(list, { replace: true });
 }
 
 /* ---------- Inventory checks ---------- */
@@ -920,8 +990,14 @@ export async function getIssueSetup() {
     fields[f.key] = { label: f.label, locked: !!f.locked, stage: f.locked ? f.stage : (c.stage || f.stage), required: f.locked && f.key !== 'approvalNote' && f.stage !== 'auto' ? true : (c.required ?? f.required) };
   });
   const arr = (k) => (Array.isArray(d[k]) && d[k].length ? d[k] : DEFAULT_ISSUE_SETUP[k]);
-  return { areas: arr('areas'), natures: arr('natures'), categories: arr('categories'), respDepts: arr('respDepts'),
+  const m = await getMaster();
+  const areas = m.has ? masterDepts(m, 'issue') : arr('areas'), respDepts = m.has ? masterDepts(m) : arr('respDepts');
+  return { fromMaster: m.has, areas, natures: arr('natures'), categories: arr('categories'), respDepts,
     psm: { ...DEFAULT_ISSUE_SETUP.psm, ...(d.psm || {}) }, approval: { ...DEFAULT_ISSUE_SETUP.approval, ...(d.approval || {}) }, rate: Number(d.rate ?? DEFAULT_ISSUE_SETUP.rate), fields };
+}
+export async function listIssueStations() {
+  const m = await getMaster();
+  return m.has ? issueStationsFromMaster(m) : listColl('issueStations');
 }
 export async function saveIssueSetup(patch) {
   await setDoc(doc(db, 'config', 'issueSetup'), { ...patch, updatedAt: serverTimestamp() }, { merge: true });
@@ -1179,7 +1255,8 @@ export async function getImprovementSetup() {
   let d = {};
   try { const s = await getDoc(doc(db, 'config', 'improvementSetup')); d = s.exists() ? s.data() : {}; } catch { /* use defaults */ }
   const arr = (k) => (Array.isArray(d[k]) && d[k].length ? d[k] : DEFAULT_IMP_SETUP[k]);
-  return { lines: arr('lines'), stations: Array.isArray(d.stations) ? d.stations : [], sources: arr('sources'), categories: arr('categories'), supports: arr('supports'),
+  const m = await getMaster(), fm = m.has ? improvementFromMaster(m) : null;
+  return { fromMaster: !!fm, lines: fm ? fm.lines : arr('lines'), stations: fm ? fm.stations : (Array.isArray(d.stations) ? d.stations : []), sources: arr('sources'), categories: arr('categories'), supports: arr('supports'),
     notifyUids: Array.isArray(d.notifyUids) ? d.notifyUids : [] };
 }
 export async function saveImprovementSetup(data) { await setDoc(doc(db, 'config', 'improvementSetup'), { ...data, updatedAt: serverTimestamp() }, { merge: true }); }

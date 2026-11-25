@@ -100,8 +100,9 @@ export async function renderIssueSetup(panel, ctx) {
 
   /* ---------------- 2. Lists ---------------- */
   function drawLists() {
-    const L = [['areas', 'Dept. / Area (where the issue is found)'], ['natures', 'Nature of issue'], ['categories', 'Issue category'], ['respDepts', 'Responsible departments']];
-    body.innerHTML = `<div class="pad"><p class="help">One item per line. These lists feed the dropdowns of the issue form and the masters. Removing an item here does not change old issues.</p>
+    const fm = D.setup.fromMaster;
+    const L = [['areas', 'Dept. / Area (where the issue is found)'], ['natures', 'Nature of issue'], ['categories', 'Issue category'], ['respDepts', 'Responsible departments']].filter(([k]) => !(fm && (k === 'areas' || k === 'respDepts')));
+    body.innerHTML = `<div class="pad"><p class="help">One item per line. These lists feed the dropdowns of the issue form and the masters. Removing an item here does not change old issues.${fm ? ' <b>Dept. / Area and Responsible departments now come from Master Data</b> (Admin Control &gt; Master Data).' : ''}</p>
       <div class="lists">${L.map(([k, t]) => `<div><label class="l" for="ls_${k}">${t}</label><textarea class="list" id="ls_${k}">${esc(D.setup[k].join('\n'))}</textarea></div>`).join('')}</div>
       <div class="row" style="margin-top:14px;justify-content:flex-end"><button type="button" class="btn btn-primary" id="lsSave">Save lists</button></div></div>`;
     body.querySelector('#lsSave').onclick = async (ev) => {
@@ -115,6 +116,7 @@ export async function renderIssueSetup(panel, ctx) {
 
   /* ---------------- 3. Stations (issue form) ---------------- */
   function drawStations() {
+    if (D.setup.fromMaster) { body.innerHTML = `<div class="pad"><div class="empty"><b>The stations come from Master Data.</b><p>Departments, lines and stations are now kept in one place for every page. Add or change them in Admin Control &gt; Master Data.</p></div></div>`; return; }
     const areas = [...new Set(D.stations.map((s) => s.area))].sort();
     body.innerHTML = `<div class="toolbar">
         <div class="search">${icon('search')}<input id="sq" type="search" placeholder="Search station or line" aria-label="Search"></div>

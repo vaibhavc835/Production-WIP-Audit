@@ -20,10 +20,12 @@ export async function renderImprovementSetup(panel, ctx) {
   if (!document.getElementById('imsCss')) { const s = document.createElement('style'); s.id = 'imsCss'; s.textContent = CSS; document.head.appendChild(s); }
   const [setup, users] = await Promise.all([getImprovementSetup(), listUsers()]);
   const S = { lines: setup.lines.map((x) => ({ ...x })), stations: setup.stations.map((x) => ({ ...x })), notify: new Set(setup.notifyUids || []) };
+  const fm = !!setup.fromMaster;
+  const fromMasterNote = '<div class="card"><h3>Departments, lines, idea-number codes and stations</h3><p class="hint">These now come from <b>Master Data</b> (Admin Control &gt; Master Data): the line code is the start of the idea number, and the stations are the ones marked for Improvement. Change them there.</p></div>';
   panel.innerHTML = `<div class="ims">
-    <div class="card"><h3>Departments, lines and idea-number codes</h3><p class="hint">The code is the start of the idea number (code FB gives FB001, FB002 and so on). Two lines can share a code, then they count together.</p>
+    ${fm ? fromMasterNote : ''}<div class="card" ${fm ? 'hidden' : ''}><h3>Departments, lines and idea-number codes</h3><p class="hint">The code is the start of the idea number (code FB gives FB001, FB002 and so on). Two lines can share a code, then they count together.</p>
       <div id="ln"></div><button type="button" class="btn btn-ghost btn-sm" id="addL">Add line</button></div>
-    <div class="card"><h3>Stations</h3><p class="hint">Users pick a station from this list for the chosen line. They can also choose Other and type a new one. To add many at once, paste one per row as <b>Department | Line | Station</b>.</p>
+    <div class="card" ${fm ? 'hidden' : ''}><h3>Stations</h3><p class="hint">Users pick a station from this list for the chosen line. They can also choose Other and type a new one. To add many at once, paste one per row as <b>Department | Line | Station</b>.</p>
       <div id="sn"></div><button type="button" class="btn btn-ghost btn-sm" id="addS">Add station</button>
       <div style="margin-top:10px"><textarea id="paste" rows="3" placeholder="Fabrication | Cutting Shop | 600T Bending"></textarea><button type="button" class="btn btn-ghost btn-sm" id="doPaste" style="margin-top:6px">Add pasted stations</button></div></div>
     <div class="card"><h3>Pick-lists</h3><p class="hint">One item per row.</p><div class="lists">
@@ -56,13 +58,13 @@ export async function renderImprovementSetup(panel, ctx) {
   const list = (id) => [...new Set($(id).value.split(/\r?\n/).map(clean).filter(Boolean))];
   $('sv').onclick = async (ev) => {
     const lines = S.lines.map((l) => ({ dept: clean(l.dept), line: clean(l.line), code: clean(l.code).replace(/\s+/g, '') })).filter((l) => l.dept || l.line || l.code);
-    if (lines.some((l) => !l.dept || !l.line || !l.code)) { toast('Every line needs a department, a line name and a code.'); return; }
-    if (new Set(lines.map((l) => l.dept + '|' + l.line)).size !== lines.length) { toast('The same department and line is listed twice.'); return; }
+    if (!fm && lines.some((l) => !l.dept || !l.line || !l.code)) { toast('Every line needs a department, a line name and a code.'); return; }
+    if (!fm && new Set(lines.map((l) => l.dept + '|' + l.line)).size !== lines.length) { toast('The same department and line is listed twice.'); return; }
     const stations = S.stations.map((s) => ({ dept: clean(s.dept), line: clean(s.line), name: clean(s.name) })).filter((s) => s.dept && s.line && s.name);
     const notifyUids = [...panel.querySelectorAll('#ul input:checked')].map((i) => i.value);
     ev.currentTarget.disabled = true;
     try {
-      await saveImprovementSetup({ lines, stations, sources: list('ls_src'), categories: list('ls_cat'), supports: list('ls_sup'), notifyUids });
+      await saveImprovementSetup({ ...(fm ? {} : { lines, stations }), sources: list('ls_src'), categories: list('ls_cat'), supports: list('ls_sup'), notifyUids });
       toast('Improvement setup saved.');
     } catch (e) { toast(friendlyError(e)); }
     $('sv').disabled = false;
