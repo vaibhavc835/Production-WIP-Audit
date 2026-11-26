@@ -4,7 +4,7 @@
    Opened from audit-admin.js.
    ===================================================================== */
 import { icon, esc, toast, openModal, friendlyError, saveAuditForm } from './wip-core.js';
-import { COL_TYPES, HDR_TYPES, AUTO_FIELDS, autoOf, isList, normType, clean, renderSheet } from './audit-sheet.js';
+import { THEMES, COL_TYPES, HDR_TYPES, AUTO_FIELDS, autoOf, isList, normType, clean, renderSheet } from './audit-sheet.js';
 
 const CSS = `
 .sbx .sec{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:14px}
@@ -33,7 +33,7 @@ const uidGen = (p) => `${p}${Date.now().toString(36)}${Math.random().toString(36
 export function editSheet(panel, f, { onClose }) {
   if (!document.getElementById('sbx-style')) { const s = document.createElement('style'); s.id = 'sbx-style'; s.textContent = CSS; document.head.appendChild(s); }
   const S = {
-    title: f?.title || '', formNo: f?.formNo || '', description: f?.description || '', active: f?.active !== false, askPlace: f ? f.askPlace !== false : true, auto: autoOf(f),
+    title: f?.title || '', formNo: f?.formNo || '', description: f?.description || '', active: f?.active !== false, askPlace: f ? f.askPlace !== false : true, theme: f?.theme || 'blue', auto: autoOf(f),
     fields: (f?.headerFields || []).map((x) => ({ ...x })),
     cols: (f?.columns || []).map((x) => ({ ...x })),
     rowMode: f?.rowMode === 'free' ? 'free' : 'fixed', startRows: f?.startRows || 5,
@@ -51,6 +51,8 @@ export function editSheet(panel, f, { onClose }) {
       <div><label class="l" for="s_desc">Description (shown at the top)</label><input id="s_desc" maxlength="400" value="${esc(S.description)}"></div></div>
       <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:10px"><label class="ck" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="s_place" style="width:auto" ${S.askPlace ? 'checked' : ''}> Ask Department and Line at the top</label>
       <label class="ck" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="s_act" style="width:auto" ${S.active ? 'checked' : ''}> Show this form on the Audit page</label></div>
+      <div style="margin-top:12px"><b style="font-size:14px">Colour theme</b><p class="hint" style="margin:2px 0 6px">Background and header colours of the form your auditors fill in.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap" id="thm">${THEMES.map(([k, l, c]) => `<label style="display:flex;gap:6px;align-items:center;cursor:pointer;padding:4px 10px;border:2px solid ${S.theme === k ? c : '#e2e8f0'};border-radius:999px;font-size:13px"><input type="radio" name="thm" value="${k}" style="width:auto" ${S.theme === k ? 'checked' : ''}><i style="width:14px;height:14px;border-radius:50%;background:${c};display:inline-block"></i>${l}</label>`).join('')}</div></div>
       <div style="margin-top:12px"><b style="font-size:14px">Recorded automatically</b><p class="hint" style="margin:2px 0 6px">The auditor's name, employee ID and the audit date are always captured from the login and the device clock. Choose what else to capture:</p>
       <div style="display:flex;gap:6px 18px;flex-wrap:wrap">${AUTO_FIELDS.map(([k, l]) => `<label class="ck" style="display:flex;gap:8px;align-items:center"><input type="checkbox" data-auto="${k}" style="width:auto" ${S.auto[k] ? 'checked' : ''}> ${esc(l)}</label>`).join('')}</div></div></div>
     <div class="sec"><h4>Extra fields at the top</h4><p class="hint">For example Shift, Trolley no., Crane no. The auditor fills them in once for the whole sheet.</p><div id="fl"></div><button type="button" class="btn btn-ghost btn-sm" id="fAdd">${icon('plus')}<span>Add field</span></button></div>
@@ -63,6 +65,7 @@ export function editSheet(panel, f, { onClose }) {
   $('s_title').oninput = (e) => { S.title = e.target.value; }; $('s_no').oninput = (e) => { S.formNo = e.target.value; }; $('s_desc').oninput = (e) => { S.description = e.target.value; };
   $('s_place').onchange = (e) => { S.askPlace = e.target.checked; }; $('s_act').onchange = (e) => { S.active = e.target.checked; };
   panel.querySelectorAll('[data-auto]').forEach((el) => { el.onchange = () => { S.auto[el.dataset.auto] = el.checked; }; });
+  panel.querySelectorAll('#thm input').forEach((el) => { el.onchange = () => { S.theme = el.value; panel.querySelectorAll('#thm label').forEach((l) => { const on = l.querySelector('input').checked; l.style.borderColor = on ? THEMES.find((t) => t[0] === S.theme)[2] : '#e2e8f0'; }); }; });
   $('sBack').onclick = $('sCancel').onclick = onClose;
   const move = (arr, i, d) => { const j = i + d; if (j < 0 || j >= arr.length) return; [arr[i], arr[j]] = [arr[j], arr[i]]; };
 
@@ -186,7 +189,7 @@ export function editSheet(panel, f, { onClose }) {
         .filter((r) => r.g ? r.label : Object.values(r.f).some(Boolean));
       if (!rows.some((r) => !r.g)) err('Write at least one row.');
     }
-    return { kind: 'sheet', title, formNo: clean(S.formNo), description: clean(S.description), askPlace: !!S.askPlace, auto: { ...S.auto }, headerFields, columns: cols, rowMode: S.rowMode, startRows: S.startRows, rows, points: [], active: !!S.active };
+    return { kind: 'sheet', title, formNo: clean(S.formNo), description: clean(S.description), askPlace: !!S.askPlace, theme: S.theme || 'blue', auto: { ...S.auto }, headerFields, columns: cols, rowMode: S.rowMode, startRows: S.startRows, rows, points: [], active: !!S.active };
   }
   $('sPrev').onclick = () => {
     try { const d = build(); const m = openModal({ title: 'Preview', wide: true, html: '<div id="pv"></div>', actions: [{ label: 'Close', kind: 'primary', onClick: (x) => x.close() }] }); renderSheet(m.el.querySelector('#pv'), d, { preview: true, ctx: { name: 'you' } }); }

@@ -12,6 +12,7 @@
 import { esc } from './wip-core.js';
 
 export const clean = (v) => String(v ?? '').replace(/[ \t]+/g, ' ').trim();
+export const THEMES = [['blue', 'Blue', '#1e3a5f'], ['green', 'Green', '#166534'], ['teal', 'Teal', '#0f766e'], ['purple', 'Purple', '#5b21b6'], ['amber', 'Amber', '#b45309'], ['red', 'Red', '#991b1b'], ['slate', 'Slate', '#334155']];
 export const COL_TYPES = [['text', 'Text'], ['okng', 'OK / NOT OK'], ['number', 'Number'], ['date', 'Date'], ['time', 'Time'], ['dropdown', 'Drop-down list'], ['radio', 'Multiple choice (pick one)'], ['checkbox', 'Checkboxes (tick any)']];
 export const HDR_TYPES = COL_TYPES.filter(([v]) => v !== 'okng');
 // 'choice' is the older name of the drop-down list
@@ -23,25 +24,32 @@ export const autoOf = (f) => ({ time: true, duration: false, area: false, ...(f?
 const OK = 'OK', NOK = 'NOT OK', NA = 'NA';
 
 const CSS = `
+.shx{--th:#1e3a5f;--th2:#dbe5f1;--th3:#f4f7fb;--en:#fff9c4;--pg:#eef2f7;background:var(--pg);border-radius:14px;padding:12px}
+.shx[data-th=green]{--th:#166534;--th2:#d5f0dd;--th3:#f2faf4;--en:#fefce8;--pg:#ebf6ee}
+.shx[data-th=teal]{--th:#0f766e;--th2:#cdeeea;--th3:#f0faf9;--en:#fefce8;--pg:#e9f5f4}
+.shx[data-th=purple]{--th:#5b21b6;--th2:#e6dcf7;--th3:#f7f3fd;--en:#fffbe6;--pg:#f1ecfa}
+.shx[data-th=amber]{--th:#b45309;--th2:#fbe6c3;--th3:#fff9ee;--en:#ffffff;--pg:#fbf3e4}
+.shx[data-th=slate]{--th:#334155;--th2:#e2e8f0;--th3:#f8fafc;--en:#fff9c4;--pg:#eceff3}
+.shx[data-th=red]{--th:#991b1b;--th2:#fbd9d9;--th3:#fff5f5;--en:#fffbe6;--pg:#fbeeee}
 .shx .gc{background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px 16px}
-.shx .gc.head{border-top:8px solid var(--navy)}
+.shx .gc.head{border-top:10px solid var(--th);background:linear-gradient(180deg,var(--th2),#fff 70%)}.shx .gc.head h1{color:var(--th)}
 .shx .gc.head h1{margin:0 0 4px;font-size:22px}
 .shx .hg{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;margin-top:12px}
 .shx .hg .l i{color:#dc2626;font-style:normal}
 .shx .tw{overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fff;margin-top:12px;max-height:75vh}
 .shx table.sh{border-collapse:separate;border-spacing:0;width:100%;font-size:14px}
-.shx .sh th{position:sticky;top:0;z-index:1;background:#e8edf3;text-align:left;padding:8px 10px;border-bottom:1px solid #b8c2cf;border-right:1px solid #d5dbe3;font-size:13px;white-space:normal}
+.shx .sh th{position:sticky;top:0;z-index:1;background:var(--th);color:#fff;text-align:left;padding:9px 10px;border-bottom:1px solid var(--th);border-right:1px solid rgba(255,255,255,.22);font-size:13px;white-space:normal}
 .shx .sh td{padding:6px 8px;border-bottom:1px solid #e2e8f0;border-right:1px solid #eef1f5;vertical-align:middle}
-.shx .sh td.fx{background:#fff;min-width:60px}
+.shx .sh td.fx{background:#fff;min-width:60px}.shx .sh tbody tr:nth-child(even) td.fx{background:var(--th3)}
 .shx .sh td.fx.dup{border-top-color:transparent;color:transparent;user-select:none}
-.shx .sh td.en{background:#fff9c4;min-width:110px}
+.shx .sh td.en{background:var(--en);min-width:110px}
 .shx .sh td.en.bad,.shx .sh tr.bad td.fx{outline:2px solid #dc2626;outline-offset:-2px}
-.shx .sh tr.grp td{background:#dbe5f1;font-weight:700;padding:8px 10px}
+.shx .sh tr.grp td{background:var(--th2);color:var(--th);font-weight:700;padding:8px 10px;border-left:4px solid var(--th)}
 .shx .sh td input[type=text],.shx .sh td input[type=number],.shx .sh td input[type=date],.shx .sh td input[type=time],.shx .sh td select,.shx .sh td textarea{width:100%;min-width:90px;box-sizing:border-box;margin:0;padding:6px 8px;font-size:14px;background:#fffef0}
 .shx .sh td textarea{min-height:34px;resize:vertical}
 .shx .og{display:flex;gap:6px;flex-wrap:wrap}
 .shx .og.cg span::before{content:'\\2610\\00a0'}.shx .og.cg input:checked+span::before{content:'\\2611\\00a0'}.shx .og.rg input:checked+span,.shx .og.cg input:checked+span{background:#dbeafe;border-color:#2563eb;color:#1e3a8a}
-.shx .autobar{display:flex;gap:6px 16px;flex-wrap:wrap;margin:12px 0 0;padding:8px 12px;border-radius:10px;background:#f1f5f9;font-size:13px;color:#334155}.shx .autobar b{color:#0f172a}
+.shx .autobar{display:flex;gap:6px 16px;flex-wrap:wrap;margin:12px 0 0;padding:8px 12px;border-radius:10px;background:var(--th2);font-size:13px;color:#334155}.shx .autobar b{color:#0f172a}
 .shx .og label{position:relative;cursor:pointer}
 .shx .og input{position:absolute;opacity:0;inset:0;width:100%;height:100%;margin:0;cursor:pointer}
 .shx .og span{display:inline-block;padding:5px 11px;border:1px solid #cbd5e1;border-radius:999px;font-weight:600;font-size:13px;background:#fff;color:#334155;white-space:nowrap}
@@ -65,7 +73,7 @@ const CSS = `
   .shx .sh td::before{content:attr(data-label);display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:2px}
   .shx .sh td.fx.dup{color:inherit;user-select:auto}
   .shx .sh td.fx:empty,.shx .sh td.rmc::before{display:none}
-  .shx .sh tr.grp{background:#dbe5f1;border-color:#b8c2cf}.shx .sh tr.grp td::before{display:none}
+  .shx .sh tr.grp{background:var(--th2);border-color:var(--th)}.shx .sh tr{border-left:4px solid var(--th)}.shx .sh tr.grp td::before{display:none}
 }
 `;
 const injectCss = () => { if (!document.getElementById('shx-style')) { const s = document.createElement('style'); s.id = 'shx-style'; s.textContent = CSS; document.head.appendChild(s); } };
@@ -93,7 +101,7 @@ export function summarize(cols, rows) {
 }
 
 /* ---------- read-only table (response details, preview of saved data) ---------- */
-export function sheetTableHtml(cols, rows, { filled = true } = {}) {
+export function sheetTableHtml(cols, rows, { filled = true, theme = 'blue' } = {}) {
   injectCss();
   const prev = {};
   const body = (rows || []).map((r) => {
@@ -110,7 +118,7 @@ export function sheetTableHtml(cols, rows, { filled = true } = {}) {
     }).join('');
     return `<tr>${tds}</tr>`;
   }).join('');
-  return `<div class="shx"><div class="tw"><table class="sh"><thead><tr>${cols.map((c) => `<th>${esc(c.label)}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table></div></div>`;
+  return `<div class="shx" data-th="${esc(theme)}"><div class="tw"><table class="sh"><thead><tr>${cols.map((c) => `<th>${esc(c.label)}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table></div></div>`;
 }
 
 /* ---------- fill a sheet ----------
@@ -173,7 +181,7 @@ export function renderSheet(host, form, { places = new Map(), ctx = {}, preview 
       return h;
     }).join('');
   };
-  host.innerHTML = `<div class="shx"><div class="gc head"><h1>${esc(form.title)}</h1>
+  host.innerHTML = `<div class="shx" data-th="${esc(form.theme || 'blue')}"><div class="gc head"><h1>${esc(form.title)}</h1>
       ${form.formNo ? `<div style="color:var(--muted);font-size:13px">${esc(form.formNo)}</div>` : ''}
       ${form.description ? `<div style="white-space:pre-wrap;color:var(--ink2);margin-top:6px">${esc(form.description)}</div>` : ''}
       <p class="hint" style="margin:10px 0 0"><span style="color:#dc2626">*</span> Required</p>
