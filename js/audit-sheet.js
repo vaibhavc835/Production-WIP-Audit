@@ -12,7 +12,14 @@
 import { esc } from './wip-core.js';
 
 export const clean = (v) => String(v ?? '').replace(/[ \t]+/g, ' ').trim();
-export const COL_TYPES = [['text', 'Text'], ['okng', 'OK / NOT OK'], ['number', 'Number'], ['date', 'Date'], ['choice', 'Choice list']];
+export const COL_TYPES = [['text', 'Text'], ['okng', 'OK / NOT OK'], ['number', 'Number'], ['date', 'Date'], ['time', 'Time'], ['dropdown', 'Drop-down list'], ['radio', 'Multiple choice (pick one)'], ['checkbox', 'Checkboxes (tick any)']];
+export const HDR_TYPES = COL_TYPES.filter(([v]) => v !== 'okng');
+// 'choice' is the older name of the drop-down list
+export const isList = (t) => t === 'choice' || t === 'dropdown' || t === 'radio' || t === 'checkbox';
+export const normType = (t) => (t === 'choice' ? 'dropdown' : (t || 'text'));
+// What the app records by itself: always the auditor's name, employee ID and the date; the rest can be switched on or off per form
+export const AUTO_FIELDS = [['time', 'Time of submission', true], ['duration', 'Time taken to fill the form', false], ['area', "Auditor's assigned area (department, line, station)", false]];
+export const autoOf = (f) => ({ time: true, duration: false, area: false, ...(f?.auto || {}) });
 const OK = 'OK', NOK = 'NOT OK', NA = 'NA';
 
 const CSS = `
@@ -30,9 +37,11 @@ const CSS = `
 .shx .sh td.en{background:#fff9c4;min-width:110px}
 .shx .sh td.en.bad,.shx .sh tr.bad td.fx{outline:2px solid #dc2626;outline-offset:-2px}
 .shx .sh tr.grp td{background:#dbe5f1;font-weight:700;padding:8px 10px}
-.shx .sh td input[type=text],.shx .sh td input[type=number],.shx .sh td input[type=date],.shx .sh td select,.shx .sh td textarea{width:100%;min-width:90px;box-sizing:border-box;margin:0;padding:6px 8px;font-size:14px;background:#fffef0}
+.shx .sh td input[type=text],.shx .sh td input[type=number],.shx .sh td input[type=date],.shx .sh td input[type=time],.shx .sh td select,.shx .sh td textarea{width:100%;min-width:90px;box-sizing:border-box;margin:0;padding:6px 8px;font-size:14px;background:#fffef0}
 .shx .sh td textarea{min-height:34px;resize:vertical}
 .shx .og{display:flex;gap:6px;flex-wrap:wrap}
+.shx .og.cg span::before{content:'\\2610\\00a0'}.shx .og.cg input:checked+span::before{content:'\\2611\\00a0'}.shx .og.rg input:checked+span,.shx .og.cg input:checked+span{background:#dbeafe;border-color:#2563eb;color:#1e3a8a}
+.shx .autobar{display:flex;gap:6px 16px;flex-wrap:wrap;margin:12px 0 0;padding:8px 12px;border-radius:10px;background:#f1f5f9;font-size:13px;color:#334155}.shx .autobar b{color:#0f172a}
 .shx .og label{position:relative;cursor:pointer}
 .shx .og input{position:absolute;opacity:0;inset:0;width:100%;height:100%;margin:0;cursor:pointer}
 .shx .og span{display:inline-block;padding:5px 11px;border:1px solid #cbd5e1;border-radius:999px;font-weight:600;font-size:13px;background:#fff;color:#334155;white-space:nowrap}
@@ -62,7 +71,7 @@ const CSS = `
 const injectCss = () => { if (!document.getElementById('shx-style')) { const s = document.createElement('style'); s.id = 'shx-style'; s.textContent = CSS; document.head.appendChild(s); } };
 
 export const colsOf = (f) => f.columns || [];
-const isNumOpts = (c) => c.type === 'choice' && (c.options || []).length > 0 && c.options.every((o) => o !== '' && !isNaN(Number(o)));
+const isNumOpts = (c) => normType(c.type) === 'dropdown' && (c.options || []).length > 0 && c.options.every((o) => o !== '' && !isNaN(Number(o)));
 const todayKey = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 
 /* ---------- counts and score (OK/NOT OK cells and numeric ratings) ---------- */
@@ -107,25 +116,48 @@ export function sheetTableHtml(cols, rows, { filled = true } = {}) {
 /* ---------- fill a sheet ----------
    host: element. form: auditForms doc. places: Map(department -> Set(lines)). opts.ctx: {name, employeeId}
    Returns { collect(), reset() }. collect() returns { error: {message, el} } or { data }. */
+// One input for any answer type. attr is put on the input that holds the value (data-e="…").
+const optsOf = (c) => (c.options || []).filter((o) => o !== '');
+function widget(c, def, nm, lb, attr) {
+  const t = normType(c.type), cur = String(def ?? '');
+  if (t === 'okng') {
+    const opts = [[OK, 'ok'], [NOK, 'nok'], ...(c.na ? [[NA, 'na']] : [])];
+    return `<div class="og" role="radiogroup"${lb}>${opts.map(([v, k]) => `<label><input type="radio" name="${nm}" value="${v}"${cur === v ? ' checked' : ''}><span class="${k}">${v}</span></label>`).join('')}</div>`;
+  }
+  if (t === 'radio') return `<div class="og rg" role="radiogroup"${lb}>${optsOf(c).map((v) => `<label><input type="radio" name="${nm}" value="${esc(v)}"${cur === v ? ' checked' : ''}><span>${esc(v)}</span></label>`).join('')}</div>`;
+  if (t === 'checkbox') {
+    const on = new Set(cur.split(', ').filter(Boolean)), list = optsOf(c).length ? optsOf(c) : ['Yes'];
+    return `<div class="og cg" role="group"${lb}>${list.map((v) => `<label><input type="checkbox" name="${nm}" value="${esc(v)}"${on.has(v) ? ' checked' : ''}><span>${esc(v)}</span></label>`).join('')}</div>`;
+  }
+  if (t === 'dropdown') return `<select ${attr}${lb}><option value=""></option>${optsOf(c).map((o) => `<option${cur === o ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+  if (t === 'number') return `<input type="number" step="any" inputmode="decimal" ${attr} value="${esc(cur)}"${lb}${c.unit ? ` placeholder="${esc(c.unit)}"` : ''}>`;
+  if (t === 'date') return `<input type="date" ${attr} value="${esc(cur)}"${lb}>`;
+  if (t === 'time') return `<input type="time" ${attr} value="${esc(cur)}"${lb}>`;
+  return `<textarea rows="1" maxlength="400" ${attr}${lb}>${esc(cur)}</textarea>`;
+}
+// Read the answer out of the element that wraps a widget
+function readWidget(root, type) {
+  const t = normType(type);
+  if (!root) return '';
+  if (t === 'okng' || t === 'radio') return root.querySelector('input:checked')?.value || '';
+  if (t === 'checkbox') return [...root.querySelectorAll('input:checked')].map((i) => i.value).join(', ');
+  return clean(root.querySelector('[data-e]')?.value);
+}
 export function renderSheet(host, form, { places = new Map(), ctx = {}, preview = false, onSubmit } = {}) {
   injectCss();
   const cols = colsOf(form), free = form.rowMode === 'free', O = '__other__';
   const fields = form.headerFields || [];
   const deptList = [...places.keys()].sort();
+  const auto = autoOf(form), startedMs = Date.now();
+  // header fields: single-line text is a plain input, the other types use the same widgets as the table
+  const hdrWidget = (f) => (normType(f.type) === 'text' ? `<input type="text" maxlength="120" data-e="v" value="${esc(f.default || '')}" aria-label="${esc(f.label)}">` : widget(f, f.default || '', 'h_' + f.id, ` aria-label="${esc(f.label)}"`, 'data-e="v"'));
   let uid = 0;
   const cell = (c, r, ri) => {
     if (c.kind !== 'entry') {
       return `<td class="fx" data-label="${esc(c.label)}" data-c="${esc(c.id)}">${esc(r?.f?.[c.id] ?? '')}</td>`;
     }
     const def = r?.e?.[c.id] ?? '', nm = `o${ri}_${c.id}`, lb = ` aria-label="${esc(c.label)}"`;
-    let w;
-    if (c.type === 'okng') {
-      const opts = [[OK, 'ok'], [NOK, 'nok'], ...(c.na ? [[NA, 'na']] : [])];
-      w = `<div class="og" role="radiogroup"${lb}>${opts.map(([v, k]) => `<label><input type="radio" name="${nm}" value="${v}"${def === v ? ' checked' : ''}><span class="${k}">${v}</span></label>`).join('')}</div>`;
-    } else if (c.type === 'choice') w = `<select data-e="${esc(c.id)}"${lb}><option value=""></option>${(c.options || []).map((o) => `<option${def === o ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
-    else if (c.type === 'number') w = `<input type="number" step="any" inputmode="decimal" data-e="${esc(c.id)}" value="${esc(def)}"${lb}${c.unit ? ` placeholder="${esc(c.unit)}"` : ''}>`;
-    else if (c.type === 'date') w = `<input type="date" data-e="${esc(c.id)}" value="${esc(def)}"${lb}>`;
-    else w = `<textarea rows="1" maxlength="400" data-e="${esc(c.id)}"${lb}>${esc(def)}</textarea>`;
+    const w = widget(c, def, nm, lb, `data-e="${esc(c.id)}"`);
     return `<td class="en" data-label="${esc(c.label)}${c.required ? ' *' : ''}" data-c="${esc(c.id)}">${w}</td>`;
   };
   const rowHtml = (r, i) => `<tr data-i="${i}" data-id="${esc(r?.id || '')}">${cols.map((c) => cell(c, r, ++uid && i)).join('')}${free ? '<td class="rmc"><button type="button" class="rm" aria-label="Remove row">×</button></td>' : ''}</tr>`;
@@ -144,17 +176,15 @@ export function renderSheet(host, form, { places = new Map(), ctx = {}, preview 
   host.innerHTML = `<div class="shx"><div class="gc head"><h1>${esc(form.title)}</h1>
       ${form.formNo ? `<div style="color:var(--muted);font-size:13px">${esc(form.formNo)}</div>` : ''}
       ${form.description ? `<div style="white-space:pre-wrap;color:var(--ink2);margin-top:6px">${esc(form.description)}</div>` : ''}
-      <p class="hint" style="margin:10px 0 0">Audited by ${esc(ctx.name || 'you')}. <span style="color:#dc2626">*</span> Required</p>
+      <p class="hint" style="margin:10px 0 0"><span style="color:#dc2626">*</span> Required</p>
       <div class="hg">
-        <div><label class="l" for="s_date">Audit date <i>*</i></label><input type="date" id="s_date" value="${todayKey()}" max="${todayKey()}"></div>
         ${form.askPlace !== false ? `<div><label class="l" for="s_dept">Department <i>*</i></label><select id="s_dept"><option value="">Choose</option>${deptList.map((d) => `<option>${esc(d)}</option>`).join('')}<option value="${O}">Other (type below)</option></select>
           <input id="s_dept_o" placeholder="Type the department" maxlength="80" style="margin-top:6px" hidden></div>
           <div><label class="l" for="s_line">Line <i>*</i></label><select id="s_line"><option value="">Choose the department first</option></select>
           <input id="s_line_o" placeholder="Type the line or area" maxlength="80" style="margin-top:6px" hidden></div>` : ''}
-        ${fields.map((f) => `<div><label class="l" for="h_${esc(f.id)}">${esc(f.label)}${f.required ? ' <i>*</i>' : ''}</label>${f.type === 'choice'
-          ? `<select id="h_${esc(f.id)}"><option value=""></option>${(f.options || []).map((o) => `<option${f.default === o ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`
-          : `<input id="h_${esc(f.id)}" type="${f.type === 'date' ? 'date' : 'text'}" maxlength="120" value="${esc(f.default || '')}">`}</div>`).join('')}
-      </div></div>
+        ${fields.map((f) => `<div><label class="l">${esc(f.label)}${f.required ? ' <i>*</i>' : ''}</label><div data-h="${esc(f.id)}">${hdrWidget(f)}</div></div>`).join('')}
+      </div>
+      <div class="autobar" aria-label="Recorded automatically"><span>Recorded automatically:</span><span>Auditor <b>${esc(ctx.name || 'you')}${ctx.employeeId ? ' (' + esc(ctx.employeeId) + ')' : ''}</b></span><span>Date <b>${esc(new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }))}</b></span>${auto.time ? '<span>Time <b id="s_atime"></b></span>' : ''}${auto.duration ? '<span>Time taken</span>' : ''}${auto.area && ctx.area ? `<span>Area <b>${esc(ctx.area)}</b></span>` : ''}</div></div>
     <div class="legend"><span><i style="background:#fff9c4"></i>Yellow: you fill in</span><span><i style="background:#fff"></i>White: fixed</span></div>
     <div class="tw"><table class="sh"><thead><tr>${cols.map((c) => `<th>${esc(c.label)}${c.kind === 'entry' && c.required ? ' *' : ''}</th>`).join('')}${free ? '<th></th>' : ''}</tr></thead><tbody id="s_body">${bodyHtml()}</tbody></table></div>
     ${free ? '<div style="margin-top:10px"><button type="button" class="btn btn-ghost" id="s_add">Add row</button></div>' : ''}
@@ -171,13 +201,13 @@ export function renderSheet(host, form, { places = new Map(), ctx = {}, preview 
     };
     $('s_line').onchange = () => { $('s_line_o').hidden = $('s_line').value !== O; };
   }
+  const clock = () => { const el = $('s_atime'); if (el) el.textContent = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }); };
+  clock(); const tk = setInterval(() => { if (!host.isConnected) clearInterval(tk); else clock(); }, 20000);
   const entryCols = cols.filter((c) => c.kind === 'entry');
   const readRow = (tr) => {
     const e = {};
     entryCols.forEach((c) => {
-      let v = '';
-      if (c.type === 'okng') v = tr.querySelector(`td[data-c="${c.id}"] input:checked`)?.value || '';
-      else v = clean(tr.querySelector(`td[data-c="${c.id}"] [data-e]`)?.value);
+      const v = readWidget(tr.querySelector(`td[data-c="${c.id}"]`), c.type);
       if (v !== '') e[c.id] = v;
     });
     return e;
@@ -199,8 +229,7 @@ export function renderSheet(host, form, { places = new Map(), ctx = {}, preview 
   const collect = () => {
     host.querySelectorAll('.bad').forEach((x) => x.classList.remove('bad')); $('s_err').hidden = true;
     const fail = (message, el) => { el?.classList?.add('bad'); return { error: { message, el } }; };
-    const auditDate = $('s_date').value;
-    if (!auditDate) return fail('Choose the audit date.', $('s_date'));
+    const now = new Date(), auditDate = todayKey();   // date and time come from the device clock, the auditor does not choose them
     let department = '', line = '', deptOther = false, lineOther = false;
     if (form.askPlace !== false) {
       deptOther = $('s_dept').value === O; lineOther = $('s_line').value === O;
@@ -210,7 +239,7 @@ export function renderSheet(host, form, { places = new Map(), ctx = {}, preview 
     }
     const headerValues = [];
     for (const f of fields) {
-      const el = $('h_' + f.id), v = clean(el.value);
+      const el = host.querySelector(`[data-h="${f.id}"]`), v = readWidget(el, f.type);
       if (f.required && !v) return fail(`Fill in “${f.label}”.`, el);
       headerValues.push({ id: f.id, label: f.label, value: v });
     }
@@ -233,9 +262,10 @@ export function renderSheet(host, form, { places = new Map(), ctx = {}, preview 
     });
     if (firstBad) return { error: { message: firstBad.msg, el: firstBad.td } };
     if (!any) return fail('Fill in at least one yellow cell before submitting.', body.querySelector('td.en'));
-    const snap = cols.map((c) => ({ id: c.id, label: c.label, kind: c.kind, type: c.type || 'text', merge: !!c.merge, options: c.options || [], ...(c.na ? { na: true } : {}) }));
+    const snap = cols.map((c) => ({ id: c.id, label: c.label, kind: c.kind, type: normType(c.type), merge: !!c.merge, options: c.options || [], ...(c.na ? { na: true } : {}) }));
     const { counts, score, ratingSum, ratingMax } = summarize(snap, out);
-    return { data: { department, deptOther, line, lineOther, auditDate, headerValues, cols: snap, rows: out, counts, score, ratingSum, ratingMax, kind: 'sheet' } };
+    const stamp = { auditedAtMs: now.getTime(), ...(auto.time ? { auditTime: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}` } : {}), ...(auto.duration ? { durationMin: Math.max(1, Math.round((now.getTime() - startedMs) / 60000)) } : {}) };
+    return { data: { ...stamp, department, deptOther, line, lineOther, auditDate, headerValues, cols: snap, rows: out, counts, score, ratingSum, ratingMax, kind: 'sheet' } };
   };
   $('s_sub').onclick = async (ev) => {
     if (preview || !onSubmit) return;

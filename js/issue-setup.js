@@ -221,7 +221,7 @@ export async function renderIssueSetup(panel, ctx) {
   function drawResp() {
     body.innerHTML = `<div class="toolbar"><select id="rd" aria-label="Department"><option value="">All departments</option>${D.setup.respDepts.map((d) => `<option>${esc(d)}</option>`).join('')}</select><span style="flex:1"></span>
       <button type="button" class="btn btn-primary" id="rAdd">${icon('plus')}<span>Add responsibility</span></button></div>
-      <p class="help" style="padding:12px 16px 0">For each responsible department and issue category, choose the Level 1 users who act on the issue. The first user is the primary. Levels 2 to 5 come from the organization chart.</p>
+      <p class="help" style="padding:12px 16px 0">The Issue form lists the users whose assigned area (User Control, Works at) matches the responsible department and line, and the initiator picks one. Use this table only as a fallback for departments where no user has an assigned area. For each responsible department and issue category, choose the Level 1 users who act on the issue. The first user is the primary. Levels 2 to 5 come from the organization chart.</p>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Responsible department</th><th>Category</th><th>Responsible users (Level 1)</th><th>Initiator picks user</th><th>Escalation path</th><th></th></tr></thead><tbody id="rb"></tbody></table></div><div class="note" id="rn"></div>`;
     const draw = () => {
       const d = body.querySelector('#rd').value;

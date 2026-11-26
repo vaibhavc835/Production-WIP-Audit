@@ -92,15 +92,15 @@ export async function renderAuditAdmin(panel, ctx) {
     const cols = []; const seen = new Set();
     rows.slice().reverse().forEach((r) => (r.cols || []).forEach((c) => { if (!seen.has(c.id)) { seen.add(c.id); cols.push(c); } }));
     const hf = []; const hs = new Set(); rows.forEach((r) => (r.headerValues || []).forEach((h) => { if (!hs.has(h.id)) { hs.add(h.id); hf.push(h); } }));
-    const sum = [['Date', 'Time', 'Audit date', 'Audit form', 'Department', 'Line', ...hf.map((h) => h.label), 'Audited by', 'Employee ID', 'OK', 'NOT OK', 'Score %']];
-    const det = [['Date', 'Time', 'Audit date', 'Audit form', 'Department', 'Line', ...hf.map((h) => h.label), 'Audited by', 'Employee ID', 'Group', ...cols.map((c) => c.label)]];
+    const sum = [['Date', 'Time', 'Audit date', 'Audit form', 'Department', 'Line', ...hf.map((h) => h.label), 'Audited by', 'Employee ID', 'Auditor area', 'Minutes taken', 'OK', 'NOT OK', 'Score %']];
+    const det = [['Date', 'Time', 'Audit date', 'Audit form', 'Department', 'Line', ...hf.map((h) => h.label), 'Audited by', 'Employee ID', 'Auditor area', 'Minutes taken', 'Group', ...cols.map((c) => c.label)]];
     rows.slice().reverse().forEach((r) => {
       const [d, t] = dt(r), hv = hf.map((h) => (r.headerValues || []).find((x) => x.id === h.id)?.value || '');
-      sum.push([d, t, r.auditDate || '', r.formTitle, r.department, r.line, ...hv, r.auditorName, r.auditorEmployeeId || '', r.counts?.ok ?? '', r.counts?.nok ?? '', r.score ?? '']);
+      sum.push([d, t, r.auditDate || '', r.formTitle, r.department, r.line, ...hv, r.auditorName, r.auditorEmployeeId || '', r.auditorArea || '', r.durationMin ?? '', r.counts?.ok ?? '', r.counts?.nok ?? '', r.score ?? '']);
       let grp = '';
       (r.rows || []).forEach((x) => {
         if (x.g) { grp = x.label; return; }
-        det.push([d, t, r.auditDate || '', r.formTitle, r.department, r.line, ...hv, r.auditorName, r.auditorEmployeeId || '', grp, ...cols.map((c) => (c.kind === 'entry' ? x.e?.[c.id] : x.f?.[c.id]) ?? '')]);
+        det.push([d, t, r.auditDate || '', r.formTitle, r.department, r.line, ...hv, r.auditorName, r.auditorEmployeeId || '', r.auditorArea || '', r.durationMin ?? '', grp, ...cols.map((c) => (c.kind === 'entry' ? x.e?.[c.id] : x.f?.[c.id]) ?? '')]);
       });
     });
     const w1 = X.utils.aoa_to_sheet(sum), w2 = X.utils.aoa_to_sheet(det);

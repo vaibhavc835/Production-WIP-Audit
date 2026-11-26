@@ -4,7 +4,7 @@
    Opened from audit-admin.js.
    ===================================================================== */
 import { icon, esc, toast, openModal, friendlyError, saveAuditForm } from './wip-core.js';
-import { COL_TYPES, clean, renderSheet } from './audit-sheet.js';
+import { COL_TYPES, HDR_TYPES, AUTO_FIELDS, autoOf, isList, normType, clean, renderSheet } from './audit-sheet.js';
 
 const CSS = `
 .sbx .sec{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:14px}
@@ -33,7 +33,7 @@ const uidGen = (p) => `${p}${Date.now().toString(36)}${Math.random().toString(36
 export function editSheet(panel, f, { onClose }) {
   if (!document.getElementById('sbx-style')) { const s = document.createElement('style'); s.id = 'sbx-style'; s.textContent = CSS; document.head.appendChild(s); }
   const S = {
-    title: f?.title || '', formNo: f?.formNo || '', description: f?.description || '', active: f?.active !== false, askPlace: f ? f.askPlace !== false : true,
+    title: f?.title || '', formNo: f?.formNo || '', description: f?.description || '', active: f?.active !== false, askPlace: f ? f.askPlace !== false : true, auto: autoOf(f),
     fields: (f?.headerFields || []).map((x) => ({ ...x })),
     cols: (f?.columns || []).map((x) => ({ ...x })),
     rowMode: f?.rowMode === 'free' ? 'free' : 'fixed', startRows: f?.startRows || 5,
@@ -51,7 +51,8 @@ export function editSheet(panel, f, { onClose }) {
       <div><label class="l" for="s_desc">Description (shown at the top)</label><input id="s_desc" maxlength="400" value="${esc(S.description)}"></div></div>
       <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:10px"><label class="ck" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="s_place" style="width:auto" ${S.askPlace ? 'checked' : ''}> Ask Department and Line at the top</label>
       <label class="ck" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="s_act" style="width:auto" ${S.active ? 'checked' : ''}> Show this form on the Audit page</label></div>
-      <p class="hint" style="margin-top:8px">Audit date and the auditor's name are always filled in automatically.</p></div>
+      <div style="margin-top:12px"><b style="font-size:14px">Recorded automatically</b><p class="hint" style="margin:2px 0 6px">The auditor's name, employee ID and the audit date are always captured from the login and the device clock. Choose what else to capture:</p>
+      <div style="display:flex;gap:6px 18px;flex-wrap:wrap">${AUTO_FIELDS.map(([k, l]) => `<label class="ck" style="display:flex;gap:8px;align-items:center"><input type="checkbox" data-auto="${k}" style="width:auto" ${S.auto[k] ? 'checked' : ''}> ${esc(l)}</label>`).join('')}</div></div></div>
     <div class="sec"><h4>Extra fields at the top</h4><p class="hint">For example Shift, Trolley no., Crane no. The auditor fills them in once for the whole sheet.</p><div id="fl"></div><button type="button" class="btn btn-ghost btn-sm" id="fAdd">${icon('plus')}<span>Add field</span></button></div>
     <div class="sec"><h4>Table columns</h4><p class="hint">Fixed columns hold text you write (check point, criteria, requirement). Yellow columns are filled in by the auditor (OK / NOT OK, remark, reading, date).</p><div id="cl"></div><button type="button" class="btn btn-ghost btn-sm" id="cAdd">${icon('plus')}<span>Add column</span></button></div>
     <div class="sec"><h4>Rows</h4><div class="seg" id="rm"><label><input type="radio" name="rmode" value="fixed"> I write the rows (fixed check points)</label><label><input type="radio" name="rmode" value="free"> The auditor adds the rows</label></div>
@@ -61,14 +62,15 @@ export function editSheet(panel, f, { onClose }) {
   const $ = (id) => panel.querySelector('#' + id);
   $('s_title').oninput = (e) => { S.title = e.target.value; }; $('s_no').oninput = (e) => { S.formNo = e.target.value; }; $('s_desc').oninput = (e) => { S.description = e.target.value; };
   $('s_place').onchange = (e) => { S.askPlace = e.target.checked; }; $('s_act').onchange = (e) => { S.active = e.target.checked; };
+  panel.querySelectorAll('[data-auto]').forEach((el) => { el.onchange = () => { S.auto[el.dataset.auto] = el.checked; }; });
   $('sBack').onclick = $('sCancel').onclick = onClose;
   const move = (arr, i, d) => { const j = i + d; if (j < 0 || j >= arr.length) return; [arr[i], arr[j]] = [arr[j], arr[i]]; };
 
   /* ----- header fields ----- */
   const drawFields = () => {
     $('fl').innerHTML = S.fields.map((x, i) => `<div class="fr"><input data-i="${i}" data-k="label" value="${esc(x.label || '')}" placeholder="Field name" aria-label="Field name">
-      <select data-i="${i}" data-k="type" aria-label="Field type"><option value="text"${x.type !== 'choice' && x.type !== 'date' ? ' selected' : ''}>Text</option><option value="date"${x.type === 'date' ? ' selected' : ''}>Date</option><option value="choice"${x.type === 'choice' ? ' selected' : ''}>Choice list</option></select>
-      <input data-i="${i}" data-k="options" value="${esc((x.options || []).join(', '))}" placeholder="Choices, separated by commas" aria-label="Choices" ${x.type === 'choice' ? '' : 'hidden'}>
+      <select data-i="${i}" data-k="type" aria-label="Field type">${HDR_TYPES.map(([v, l]) => `<option value="${v}"${normType(x.type) === v ? ' selected' : ''}>${l}</option>`).join('')}</select>
+      <input data-i="${i}" data-k="options" value="${esc((x.options || []).join(', '))}" placeholder="Choices, separated by commas" aria-label="Choices" ${isList(x.type) ? '' : 'hidden'}>
       <label class="ck" style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="checkbox" data-i="${i}" data-k="required" ${x.required ? 'checked' : ''} style="width:auto"> Required</label>
       <button type="button" class="btn btn-danger btn-sm" data-rm="${i}" aria-label="Remove field">${icon('trash')}</button></div>`).join('') || '<p class="hint">No extra field.</p>';
     $('fl').querySelectorAll('[data-k]').forEach((el) => {
@@ -86,8 +88,8 @@ export function editSheet(panel, f, { onClose }) {
   const drawCols = () => {
     $('cl').innerHTML = S.cols.map((c, i) => `<div class="cr ${c.kind === 'entry' ? 'en' : ''}"><input data-i="${i}" data-k="label" value="${esc(c.label || '')}" placeholder="Column heading" aria-label="Column heading">
       <select data-i="${i}" data-k="kind" aria-label="Who fills this column"><option value="fixed"${c.kind !== 'entry' ? ' selected' : ''}>Fixed text</option><option value="entry"${c.kind === 'entry' ? ' selected' : ''}>Auditor fills (yellow)</option></select>
-      ${c.kind === 'entry' ? `<select data-i="${i}" data-k="type" aria-label="Type of entry">${COL_TYPES.map(([v, l]) => `<option value="${v}"${(c.type || 'text') === v ? ' selected' : ''}>${l}</option>`).join('')}</select>` : '<span class="hint" style="margin:0">Written by you</span>'}
-      <input data-i="${i}" data-k="options" value="${esc((c.options || []).join(', '))}" placeholder="${c.type === 'choice' ? 'Choices, separated by commas' : ''}" aria-label="Choices" ${c.kind === 'entry' && c.type === 'choice' ? '' : 'hidden'}>
+      ${c.kind === 'entry' ? `<select data-i="${i}" data-k="type" aria-label="Type of entry">${COL_TYPES.map(([v, l]) => `<option value="${v}"${normType(c.type) === v ? ' selected' : ''}>${l}</option>`).join('')}</select>` : '<span class="hint" style="margin:0">Written by you</span>'}
+      <input data-i="${i}" data-k="options" value="${esc((c.options || []).join(', '))}" placeholder="Choices, separated by commas" aria-label="Choices" ${c.kind === 'entry' && isList(c.type) ? '' : 'hidden'}>
       ${c.kind === 'entry' ? `<label class="ck"><input type="checkbox" data-i="${i}" data-k="required" ${c.required ? 'checked' : ''}> Required</label>` : `<label class="ck"><input type="checkbox" data-i="${i}" data-k="merge" ${c.merge ? 'checked' : ''}> Merge repeated</label>`}
       <span style="display:flex;gap:4px"><button type="button" class="btn btn-ghost btn-sm" data-up="${i}" aria-label="Move left" ${i === 0 ? 'disabled' : ''}>↑</button><button type="button" class="btn btn-ghost btn-sm" data-dn="${i}" aria-label="Move right" ${i === S.cols.length - 1 ? 'disabled' : ''}>↓</button></span>
       <button type="button" class="btn btn-danger btn-sm" data-rm="${i}" aria-label="Remove column">${icon('trash')}</button>
@@ -164,8 +166,8 @@ export function editSheet(panel, f, { onClose }) {
       const label = clean(c.label); if (!label) err(`Column ${i + 1} needs a heading.`);
       const o = { id: c.id, label, kind: c.kind === 'entry' ? 'entry' : 'fixed' };
       if (o.kind === 'entry') {
-        o.type = c.type || 'text'; if (c.required) o.required = true;
-        if (o.type === 'choice') { o.options = (c.options || []).map(clean).filter(Boolean); if (!o.options.length) err(`Column “${label}”: enter the choices, separated by commas.`); }
+        o.type = normType(c.type); if (c.required) o.required = true;
+        if (isList(o.type)) { o.options = (c.options || []).map(clean).filter(Boolean); if (!o.options.length) err(`Column “${label}”: enter the choices, separated by commas.`); }
         if (o.type === 'okng' && c.na) o.na = true; if (o.type === 'text' && c.reqOnNok) o.reqOnNok = true; if (c.unit) o.unit = c.unit;
       } else { o.type = 'text'; if (c.merge) o.merge = true; }
       return o;
@@ -173,8 +175,8 @@ export function editSheet(panel, f, { onClose }) {
     if (!cols.some((c) => c.kind === 'entry')) err('Add at least one column filled by the auditor (yellow).');
     const headerFields = S.fields.map((x, i) => {
       const label = clean(x.label); if (!label) err(`Extra field ${i + 1} needs a name.`);
-      const o = { id: x.id, label, type: x.type === 'choice' || x.type === 'date' ? x.type : 'text' };
-      if (o.type === 'choice') { o.options = (x.options || []).map(clean).filter(Boolean); if (!o.options.length) err(`Field “${label}”: enter the choices.`); }
+      const o = { id: x.id, label, type: HDR_TYPES.some(([v]) => v === normType(x.type)) ? normType(x.type) : 'text' };
+      if (isList(o.type)) { o.options = (x.options || []).map(clean).filter(Boolean); if (!o.options.length) err(`Field “${label}”: enter the choices.`); }
       if (x.required) o.required = true; if (x.default) o.default = x.default; return o;
     });
     const fcs = cols.filter((c) => c.kind === 'fixed');
@@ -184,7 +186,7 @@ export function editSheet(panel, f, { onClose }) {
         .filter((r) => r.g ? r.label : Object.values(r.f).some(Boolean));
       if (!rows.some((r) => !r.g)) err('Write at least one row.');
     }
-    return { kind: 'sheet', title, formNo: clean(S.formNo), description: clean(S.description), askPlace: !!S.askPlace, headerFields, columns: cols, rowMode: S.rowMode, startRows: S.startRows, rows, points: [], active: !!S.active };
+    return { kind: 'sheet', title, formNo: clean(S.formNo), description: clean(S.description), askPlace: !!S.askPlace, auto: { ...S.auto }, headerFields, columns: cols, rowMode: S.rowMode, startRows: S.startRows, rows, points: [], active: !!S.active };
   }
   $('sPrev').onclick = () => {
     try { const d = build(); const m = openModal({ title: 'Preview', wide: true, html: '<div id="pv"></div>', actions: [{ label: 'Close', kind: 'primary', onClick: (x) => x.close() }] }); renderSheet(m.el.querySelector('#pv'), d, { preview: true, ctx: { name: 'you' } }); }

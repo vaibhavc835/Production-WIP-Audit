@@ -668,7 +668,7 @@ export async function updateUser(uid, data) {
 
 let secondary = null;
 // Creates the login with a second app instance so the admin stays signed in.
-export async function createUser({ employeeId, name, password, role = 'user', departments = [], userNo = null, mustChangePassword = true, level = 1, pages = null, reportsTo = '', scopeDept = '', scopeLine = '', scopeStation = '' }) {
+export async function createUser({ employeeId, name, password, role = 'user', departments = [], userNo = null, mustChangePassword = true, level = 1, pages = null, reportsTo = '', scopeDept = '', canExport = false, scopeLine = '', scopeStation = '' }) {
   if (!secondary) secondary = initializeApp(app.options, 'wip-secondary');
   const a2 = getAuth(secondary);
   const email = idToEmail(employeeId);
@@ -677,7 +677,7 @@ export async function createUser({ employeeId, name, password, role = 'user', de
   try { await signOut(a2); } catch { /* ignore */ }
   const profile = {
     name, employeeId: String(employeeId).trim(), email, role, departments,
-    active: true, mustChangePassword, userNo, level: lvOf(level), pages: Array.isArray(pages) ? pages : null, reportsTo: reportsTo || '', ...scopeOf(level, { dept: scopeDept, line: scopeLine, station: scopeStation })
+    active: true, mustChangePassword, userNo, level: lvOf(level), pages: Array.isArray(pages) ? pages : null, reportsTo: reportsTo || '', canExport: !!canExport, ...scopeOf(level, { dept: scopeDept, line: scopeLine, station: scopeStation })
   };
   await setDoc(doc(db, 'users', uid), { ...profile, createdAt: serverTimestamp(), createdBy: auth.currentUser.uid });
   if (mustChangePassword || STORE_PASSWORDS_FOR_TESTING) { try { await saveTempPassword(uid, password); } catch { /* not critical */ } }
@@ -717,6 +717,8 @@ function applyMasterDepartments(m) {
   const depts = [...new Set((m.inv || []).map((x) => x.dept))];
   if (depts.length) DEPARTMENTS.splice(0, DEPARTMENTS.length, 'All', ...depts);
 }
+// Every department in Master Data (stations or inventory), used for the user Access departments list and for Support required
+export const allMasterDepts = (m) => [...new Set([...(m.stations || []).map((x) => x.dept), ...(m.inv || []).map((x) => x.dept)].filter(Boolean))];
 export async function saveMaster({ stations, inv }, { syncInv = true } = {}) {
   await setDoc(doc(db, 'config', 'master'), { stations, inv, updatedAt: serverTimestamp(), updatedMs: Date.now() });
   _master = { stations, inv, updatedMs: Date.now(), has: stations.length > 0 };
@@ -1004,6 +1006,25 @@ export async function saveIssueSetup(patch) {
 }
 
 // Simple master collections: issueStations, issueResp, issueLead
+// Admin > Database: read every document of a collection as plain data, count, and delete them in batches
+const plain = (v) => {
+  if (v == null || typeof v !== 'object') return v;
+  if (typeof v.toDate === 'function') { try { return v.toDate().toISOString(); } catch { return null; } }
+  if (Array.isArray(v)) return v.map(plain);
+  return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, plain(x)]));
+};
+export async function readCollPlain(name) {
+  const s = await getDocs(collection(db, name));
+  return s.docs.map((d) => ({ id: d.id, ...plain(d.data()) }));
+}
+export async function deleteCollection(name, onProgress) {
+  const s = await getDocs(collection(db, name)); let n = 0;
+  for (let i = 0; i < s.docs.length; i += 400) {
+    const b = writeBatch(db); s.docs.slice(i, i + 400).forEach((d) => b.delete(doc(db, name, d.id))); await b.commit(); n += Math.min(400, s.docs.length - i);
+    if (onProgress) onProgress(n, s.docs.length);
+  }
+  return n;
+}
 export async function listColl(name) {
   const s = await getDocs(collection(db, name));
   return s.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -1054,11 +1075,19 @@ export function pickLead(leads, dept, cat) {
     || leads.find((x) => isAny(x.department) && x.category === cat) || leads.find((x) => isAny(x.department) && isAny(x.category));
   return { target: Number(r?.target ?? DEFAULT_LEAD.target), t3: Number(r?.t3 ?? DEFAULT_LEAD.t3), t4: Number(r?.t4 ?? DEFAULT_LEAD.t4), t5: Number(r?.t5 ?? DEFAULT_LEAD.t5), custom: !!r };
 }
-export function buildRoute({ users, resps, leads, respDept, category, initiatorUid, chosenUid = '' }) {
+export function buildRoute({ users, resps, leads, respDept, respLine = '', category, initiatorUid, chosenUid = '' }) {
   const r = pickResp(resps, respDept, category);
-  let uids = (r?.userUids || []).filter((u) => users.some((x) => x.uid === u && x.active !== false));
-  const canPick = !!r?.pick && uids.length > 1;
-  if (canPick && chosenUid && uids.includes(chosenUid)) uids = [chosenUid, ...uids.filter((u) => u !== chosenUid)];
+  const lc = (x) => String(x || '').trim().toLowerCase();
+  const live = (u) => u.active !== false && lvOf(u.level) >= 1;
+  // People who work in the chosen responsible department (and line) come from their assigned area in User Control.
+  // A department-level user (HOD, GM, MD) is listed for every line of the department.
+  let cands = users.filter((u) => live(u) && respDept && lc(u.scopeDept) === lc(respDept) && (!respLine || !u.scopeLine || lc(u.scopeLine) === lc(respLine)));
+  cands.sort((a, b) => (respLine ? (lc(b.scopeLine) === lc(respLine)) - (lc(a.scopeLine) === lc(respLine)) : 0) || lvOf(a.level) - lvOf(b.level) || String(a.name || '').localeCompare(String(b.name || '')));
+  const fromScope = cands.length > 0;
+  let uids = fromScope ? cands.map((u) => u.uid) : (r?.userUids || []).filter((u) => users.some((x) => x.uid === u && x.active !== false));
+  const canPick = fromScope || (!!r?.pick && uids.length > 1);
+  const pickUids = canPick ? uids.slice() : [];
+  if (canPick) uids = [chosenUid && uids.includes(chosenUid) ? chosenUid : uids[0], ...[]].filter(Boolean);
   const primary = uids[0] || null;
   const tiers = { l2: null, l3: null, l4: null, l5: null };
   if (primary) [2, 3, 4, 5].forEach((k) => { tiers['l' + k] = tierUser(users, primary, k)?.uid || null; });
@@ -1068,7 +1097,7 @@ export function buildRoute({ users, resps, leads, respDept, category, initiatorU
   // The initiator approves. A workman (Level 0) cannot approve, so the nearest superior of Level 1 or above does.
   const ini = users.find((u) => u.uid === initiatorUid);
   const approverUid = !initiatorUid ? null : (ini && lvOf(ini.level) === 0 ? (tierUser(users, initiatorUid, 1)?.uid || initiatorUid) : initiatorUid);
-  return { responsibleUids: uids, primaryUid: primary, tiers, lead: pickLead(leads, respDept, category), approverUid, optTiers, canPick, pickUids: canPick ? (r.userUids || []).filter((u) => users.some((x) => x.uid === u && x.active !== false)) : [] };
+  return { responsibleUids: uids, primaryUid: primary, tiers, lead: pickLead(leads, respDept, category), approverUid, optTiers, canPick, pickUids, fromScope };
 }
 
 /* ----- dates and ids ----- */
@@ -1256,7 +1285,7 @@ export async function getImprovementSetup() {
   try { const s = await getDoc(doc(db, 'config', 'improvementSetup')); d = s.exists() ? s.data() : {}; } catch { /* use defaults */ }
   const arr = (k) => (Array.isArray(d[k]) && d[k].length ? d[k] : DEFAULT_IMP_SETUP[k]);
   const m = await getMaster(), fm = m.has ? improvementFromMaster(m) : null;
-  return { fromMaster: !!fm, lines: fm ? fm.lines : arr('lines'), stations: fm ? fm.stations : (Array.isArray(d.stations) ? d.stations : []), sources: arr('sources'), categories: arr('categories'), supports: arr('supports'),
+  return { fromMaster: !!fm, lines: fm ? fm.lines : arr('lines'), stations: fm ? fm.stations : (Array.isArray(d.stations) ? d.stations : []), sources: arr('sources'), categories: arr('categories'), supports: m.has ? masterDepts(m) : arr('supports'), supportsFromMaster: !!m.has,
     notifyUids: Array.isArray(d.notifyUids) ? d.notifyUids : [] };
 }
 export async function saveImprovementSetup(data) { await setDoc(doc(db, 'config', 'improvementSetup'), { ...data, updatedAt: serverTimestamp() }, { merge: true }); }

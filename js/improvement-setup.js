@@ -31,7 +31,7 @@ export async function renderImprovementSetup(panel, ctx) {
     <div class="card"><h3>Pick-lists</h3><p class="hint">One item per row.</p><div class="lists">
       <div><label class="l" for="ls_src">Source of improvement</label><textarea id="ls_src" rows="6">${esc(setup.sources.join('\n'))}</textarea></div>
       <div><label class="l" for="ls_cat">Improvement category</label><textarea id="ls_cat" rows="6">${esc(setup.categories.join('\n'))}</textarea></div>
-      <div><label class="l" for="ls_sup">Support required</label><textarea id="ls_sup" rows="6">${esc(setup.supports.join('\n'))}</textarea></div></div></div>
+      ${setup.supportsFromMaster ? `<div><label class="l">Support required</label><div class="hint" style="margin:0">Uses the departments of Master Data (${setup.supports.length}). Change them in Admin Control &gt; Master Data.</div></div>` : `<div><label class="l" for="ls_sup">Support required</label><textarea id="ls_sup" rows="6">${esc(setup.supports.join('\n'))}</textarea></div>`}</div></div>
     <div class="card"><h3>Users who receive every idea</h3><p class="hint">Two or three users who get all ideas together with the person's Level 2 manager. They can approve ideas and do the sustainability checks. If a person has no Level 2 manager, only these users (and the admin) see the idea.</p>
       <div class="ulist" id="ul">${users.filter((u) => u.active !== false).sort((a, b) => String(a.name).localeCompare(String(b.name))).map((u) => `<label><input type="checkbox" value="${esc(u.uid)}"${S.notify.has(u.uid) ? ' checked' : ''}> ${esc(u.name)}${u.employeeId ? ' (' + esc(u.employeeId) + ')' : ''}</label>`).join('')}</div></div>
     <button type="button" class="btn btn-primary" id="sv">Save improvement setup</button></div>`;
@@ -64,7 +64,7 @@ export async function renderImprovementSetup(panel, ctx) {
     const notifyUids = [...panel.querySelectorAll('#ul input:checked')].map((i) => i.value);
     ev.currentTarget.disabled = true;
     try {
-      await saveImprovementSetup({ ...(fm ? {} : { lines, stations }), sources: list('ls_src'), categories: list('ls_cat'), supports: list('ls_sup'), notifyUids });
+      await saveImprovementSetup({ ...(fm ? {} : { lines, stations }), sources: list('ls_src'), categories: list('ls_cat'), ...(setup.supportsFromMaster ? {} : { supports: list('ls_sup') }), notifyUids });
       toast('Improvement setup saved.');
     } catch (e) { toast(friendlyError(e)); }
     $('sv').disabled = false;
