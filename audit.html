@@ -158,7 +158,7 @@
         html: `<div class="hero">${ring(r.score)}<div><span class="pill green">${r.counts?.ok ?? 0} OK</span> <span class="pill red">${r.counts?.nok ?? 0} NOT OK</span></div></div><p class="hint">${esc(when(r))} · audit date ${esc(r.auditDate || '')}${r.auditTime ? ' ' + esc(r.auditTime) : ''}${r.durationMin ? ' · took ' + r.durationMin + ' min' : ''}${r.auditorArea ? ' · area ' + esc(r.auditorArea) : ''}${r.department ? ' · ' + esc(r.department) + ' · ' + esc(r.line) : ''} · audited by ${esc(r.auditorName)}${r.auditorEmployeeId ? ' (' + esc(r.auditorEmployeeId) + ')' : ''}</p>
           ${(r.headerValues || []).filter((h) => h.value).length ? `<p>${r.headerValues.filter((h) => h.value).map((h) => `<b>${esc(h.label)}:</b> ${esc(h.value)}`).join(' &nbsp; ')}</p>` : ''}
           <p><span class="pill green">${r.counts?.ok ?? 0} OK</span> <span class="pill red">${r.counts?.nok ?? 0} NOT OK</span> ${r.score != null ? `<b style="margin-left:8px">Score ${r.score}%</b>` : ''}</p>
-          ${sheetTableHtml(r.cols || [], r.rows || [])}`,
+          ${sheetTableHtml(r.cols || [], r.rows || [], { theme: forms.find((f) => f.id === r.formId)?.theme || 'blue' })}`,
         actions: [{ label: 'Close', onClick: (x) => x.close() }]
       });
       return;
