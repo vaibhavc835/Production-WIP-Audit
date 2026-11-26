@@ -65,8 +65,11 @@ export async function renderDatabase(panel, ctx) {
   async function download(btn, kind) {
     const msg = panel.querySelector('#dbMsg'); btn.disabled = true; msg.textContent = 'Reading the database…';
     try {
-      const data = {};
-      for (const n of DOWNLOAD) data[n] = (await readCollPlain(n)).map((r) => (n === 'users' ? (({ password, ...x }) => x)(r) : r));
+      const data = {}, failed = [];
+      for (const n of DOWNLOAD) {
+        try { data[n] = (await readCollPlain(n)).map((r) => (n === 'users' ? (({ password, ...x }) => x)(r) : r)); }
+        catch (e) { data[n] = []; failed.push(n); }   // one blocked collection must not stop the whole download
+      }
       const name = `WIP_Database_${stamp()}`;
       if (kind === 'json') save(new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), exportedBy: ctx.name, data }, null, 1)], { type: 'application/json' }), name + '.json');
       else {
@@ -83,7 +86,7 @@ export async function renderDatabase(panel, ctx) {
         const out = X.write(wb, { bookType: 'xlsx', type: 'array' });
         save(new Blob([out], { type: 'application/octet-stream' }), name + '.xlsx');
       }
-      backedUp = true; msg.textContent = `Downloaded ${Object.values(data).reduce((a, r) => a + r.length, 0)} records.`;
+      backedUp = !failed.length; msg.textContent = `Downloaded ${Object.values(data).reduce((a, r) => a + r.length, 0)} records.` + (failed.length ? ` Could not read: ${failed.join(', ')}. Publish the latest firestore.rules in Firebase, then download again. Do not delete data until the download is complete.` : '');
     } catch (e) { msg.textContent = friendlyError(e); }
     btn.disabled = false;
   }

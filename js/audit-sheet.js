@@ -209,6 +209,9 @@ export function renderSheet(host, form, { places = new Map(), ctx = {}, preview 
     };
     $('s_line').onchange = () => { $('s_line_o').hidden = $('s_line').value !== O; };
   }
+  if (form.askPlace !== false && form.defaultDept) {   // pre-select the default department and line from Master Data
+    const sd = $('s_dept'); if ([...sd.options].some((o) => o.value === form.defaultDept)) { sd.value = form.defaultDept; sd.onchange(); const sl = $('s_line'); if (form.defaultLine && [...sl.options].some((o) => o.value === form.defaultLine)) sl.value = form.defaultLine; }
+  }
   const clock = () => { const el = $('s_atime'); if (el) el.textContent = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }); };
   clock(); const tk = setInterval(() => { if (!host.isConnected) clearInterval(tk); else clock(); }, 20000);
   const entryCols = cols.filter((c) => c.kind === 'entry');
@@ -238,7 +241,7 @@ export function renderSheet(host, form, { places = new Map(), ctx = {}, preview 
     host.querySelectorAll('.bad').forEach((x) => x.classList.remove('bad')); $('s_err').hidden = true;
     const fail = (message, el) => { el?.classList?.add('bad'); return { error: { message, el } }; };
     const now = new Date(), auditDate = todayKey();   // date and time come from the device clock, the auditor does not choose them
-    let department = '', line = '', deptOther = false, lineOther = false;
+    let department = form.askPlace === false ? clean(form.defaultDept) : '', line = form.askPlace === false ? clean(form.defaultLine) : '', deptOther = false, lineOther = false;
     if (form.askPlace !== false) {
       deptOther = $('s_dept').value === O; lineOther = $('s_line').value === O;
       department = deptOther ? clean($('s_dept_o').value) : $('s_dept').value; line = lineOther ? clean($('s_line_o').value) : $('s_line').value;

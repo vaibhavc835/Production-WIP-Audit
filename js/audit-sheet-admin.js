@@ -3,8 +3,8 @@
    Admin builder for checksheet-style audit forms (table format with fixed and yellow entry cells).
    Opened from audit-admin.js.
    ===================================================================== */
-import { icon, esc, toast, openModal, friendlyError, saveAuditForm } from './wip-core.js';
-import { THEMES, COL_TYPES, HDR_TYPES, AUTO_FIELDS, autoOf, isList, normType, clean, renderSheet } from './audit-sheet.js';
+import { icon, esc, toast, openModal, friendlyError, saveAuditForm, getMaster, auditPlacesFromMaster } from './wip-core.js';
+import { COL_TYPES, HDR_TYPES, AUTO_FIELDS, autoOf, isList, normType, clean, renderSheet } from './audit-sheet.js';
 
 const CSS = `
 .sbx .sec{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:14px}
@@ -28,12 +28,14 @@ const CSS = `
 .sbx .seg label input{width:auto;margin:0}
 @media (max-width:900px){.sbx .cr,.sbx .fr{grid-template-columns:1fr 1fr}}
 `;
+// Colour themes (the fill-in page in audit-sheet.js has the matching styles)
+const THEMES = [['blue', 'Blue', '#1e3a5f'], ['green', 'Green', '#166534'], ['teal', 'Teal', '#0f766e'], ['purple', 'Purple', '#5b21b6'], ['amber', 'Amber', '#b45309'], ['red', 'Red', '#991b1b'], ['slate', 'Slate', '#334155']];
 const uidGen = (p) => `${p}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
 
 export function editSheet(panel, f, { onClose }) {
   if (!document.getElementById('sbx-style')) { const s = document.createElement('style'); s.id = 'sbx-style'; s.textContent = CSS; document.head.appendChild(s); }
   const S = {
-    title: f?.title || '', formNo: f?.formNo || '', description: f?.description || '', active: f?.active !== false, askPlace: f ? f.askPlace !== false : true, theme: f?.theme || 'blue', auto: autoOf(f),
+    title: f?.title || '', formNo: f?.formNo || '', description: f?.description || '', active: f?.active !== false, askPlace: f ? f.askPlace !== false : true, theme: f?.theme || 'blue', defaultDept: f?.defaultDept || '', defaultLine: f?.defaultLine || '', auto: autoOf(f),
     fields: (f?.headerFields || []).map((x) => ({ ...x })),
     cols: (f?.columns || []).map((x) => ({ ...x })),
     rowMode: f?.rowMode === 'free' ? 'free' : 'fixed', startRows: f?.startRows || 5,
@@ -51,6 +53,8 @@ export function editSheet(panel, f, { onClose }) {
       <div><label class="l" for="s_desc">Description (shown at the top)</label><input id="s_desc" maxlength="400" value="${esc(S.description)}"></div></div>
       <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:10px"><label class="ck" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="s_place" style="width:auto" ${S.askPlace ? 'checked' : ''}> Ask Department and Line at the top</label>
       <label class="ck" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="s_act" style="width:auto" ${S.active ? 'checked' : ''}> Show this form on the Audit page</label></div>
+      <div style="margin-top:12px"><b style="font-size:14px">Default department and line</b><p class="hint" style="margin:2px 0 6px">From Master Data. The auditor sees these already selected. If "Ask Department and Line" is off, they are recorded automatically.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap"><select id="s_dd" aria-label="Default department" style="max-width:260px"><option value="">No default department</option></select><select id="s_dl" aria-label="Default line" style="max-width:260px"><option value="">No default line</option></select></div></div>
       <div style="margin-top:12px"><b style="font-size:14px">Colour theme</b><p class="hint" style="margin:2px 0 6px">Background and header colours of the form your auditors fill in.</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap" id="thm">${THEMES.map(([k, l, c]) => `<label style="display:flex;gap:6px;align-items:center;cursor:pointer;padding:4px 10px;border:2px solid ${S.theme === k ? c : '#e2e8f0'};border-radius:999px;font-size:13px"><input type="radio" name="thm" value="${k}" style="width:auto" ${S.theme === k ? 'checked' : ''}><i style="width:14px;height:14px;border-radius:50%;background:${c};display:inline-block"></i>${l}</label>`).join('')}</div></div>
       <div style="margin-top:12px"><b style="font-size:14px">Recorded automatically</b><p class="hint" style="margin:2px 0 6px">The auditor's name, employee ID and the audit date are always captured from the login and the device clock. Choose what else to capture:</p>
@@ -66,6 +70,15 @@ export function editSheet(panel, f, { onClose }) {
   $('s_place').onchange = (e) => { S.askPlace = e.target.checked; }; $('s_act').onchange = (e) => { S.active = e.target.checked; };
   panel.querySelectorAll('[data-auto]').forEach((el) => { el.onchange = () => { S.auto[el.dataset.auto] = el.checked; }; });
   panel.querySelectorAll('#thm input').forEach((el) => { el.onchange = () => { S.theme = el.value; panel.querySelectorAll('#thm label').forEach((l) => { const on = l.querySelector('input').checked; l.style.borderColor = on ? THEMES.find((t) => t[0] === S.theme)[2] : '#e2e8f0'; }); }; });
+  let PL = new Map();
+  const fillLines = () => { const d = $('s_dd').value; $('s_dl').innerHTML = `<option value="">${d ? 'No default line' : 'Choose a department first'}</option>${[...(PL.get(d) || [])].sort().map((l) => `<option${S.defaultLine === l ? ' selected' : ''}>${esc(l)}</option>`).join('')}`; $('s_dl').disabled = !d; };
+  getMaster().then((m) => {
+    PL = auditPlacesFromMaster(m);
+    if (S.defaultDept && !PL.has(S.defaultDept)) PL.set(S.defaultDept, new Set(S.defaultLine ? [S.defaultLine] : []));
+    $('s_dd').innerHTML = `<option value="">No default department</option>${[...PL.keys()].sort().map((d) => `<option${S.defaultDept === d ? ' selected' : ''}>${esc(d)}</option>`).join('')}`; fillLines();
+  }).catch(() => { $('s_dd').disabled = true; $('s_dl').disabled = true; });
+  $('s_dd').onchange = () => { S.defaultDept = $('s_dd').value; S.defaultLine = ''; fillLines(); };
+  $('s_dl').onchange = () => { S.defaultLine = $('s_dl').value; };
   $('sBack').onclick = $('sCancel').onclick = onClose;
   const move = (arr, i, d) => { const j = i + d; if (j < 0 || j >= arr.length) return; [arr[i], arr[j]] = [arr[j], arr[i]]; };
 
@@ -189,10 +202,10 @@ export function editSheet(panel, f, { onClose }) {
         .filter((r) => r.g ? r.label : Object.values(r.f).some(Boolean));
       if (!rows.some((r) => !r.g)) err('Write at least one row.');
     }
-    return { kind: 'sheet', title, formNo: clean(S.formNo), description: clean(S.description), askPlace: !!S.askPlace, theme: S.theme || 'blue', auto: { ...S.auto }, headerFields, columns: cols, rowMode: S.rowMode, startRows: S.startRows, rows, points: [], active: !!S.active };
+    return { kind: 'sheet', title, formNo: clean(S.formNo), description: clean(S.description), askPlace: !!S.askPlace, defaultDept: S.defaultDept || '', defaultLine: S.defaultLine || '', theme: S.theme || 'blue', auto: { ...S.auto }, headerFields, columns: cols, rowMode: S.rowMode, startRows: S.startRows, rows, points: [], active: !!S.active };
   }
   $('sPrev').onclick = () => {
-    try { const d = build(); const m = openModal({ title: 'Preview', wide: true, html: '<div id="pv"></div>', actions: [{ label: 'Close', kind: 'primary', onClick: (x) => x.close() }] }); renderSheet(m.el.querySelector('#pv'), d, { preview: true, ctx: { name: 'you' } }); }
+    try { const d = build(); const m = openModal({ title: 'Preview', wide: true, html: '<div id="pv"></div>', actions: [{ label: 'Close', kind: 'primary', onClick: (x) => x.close() }] }); renderSheet(m.el.querySelector('#pv'), d, { preview: true, places: PL, ctx: { name: 'you' } }); }
     catch (e) { $('s_err').textContent = e.message; }
   };
   $('sSave').onclick = async (ev) => {

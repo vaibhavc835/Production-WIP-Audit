@@ -9,10 +9,13 @@ import * as base from './firebase-config.js';
    downloads it only once (two different versions would mean two full downloads). */
 const SDK_FALLBACK = '10.12.2';
 async function sdkVersion() {
+  // Remembered from the previous page, so this page does not wait for an extra download before it can start
+  try { const c = localStorage.getItem('wipSdkVersion'); if (c) return c; } catch { /* storage blocked */ }
   try {
     const r = await fetch(new URL('./firebase-config.js', import.meta.url));
     const m = (await r.text()).match(/firebasejs\/(\d+\.\d+\.\d+)\//);
-    return m ? m[1] : SDK_FALLBACK;
+    const v = m ? m[1] : SDK_FALLBACK; try { localStorage.setItem('wipSdkVersion', v); } catch { /* ignore */ }
+    return v;
   } catch { return SDK_FALLBACK; }
 }
 const SDK = `https://www.gstatic.com/firebasejs/${await sdkVersion()}/`;
@@ -439,9 +442,13 @@ export async function startPage({ active, adminOnly = false, title }) {
     });
   }
 
+  const t0 = performance.now(), lap = {};
   const user = await new Promise((res) => { const un = onAuthStateChanged(auth, (u) => { un(); res(u); }); });
   if (!user) return goLogin();
   store.set('wipHops', '0');
+  lap.auth = Math.round(performance.now() - t0);
+  // Master Data is needed by most pages: ask for it now, at the same time as the profile, instead of after the page has opened
+  if (['inventory', 'issue', 'improvement', 'audit', 'dashboard', 'admin'].includes(active)) getMaster().catch(() => null);
 
   let profile;
   try {
@@ -488,6 +495,7 @@ export async function startPage({ active, adminOnly = false, title }) {
   }
 
   onAuthStateChanged(auth, (u) => { if (!u) location.replace('index.html'); });
+  lap.profile = Math.round(performance.now() - t0) - lap.auth;
 
   const name = profile.name || (user.email || '').split('@')[0] || 'User';
   const ctx = {
@@ -496,6 +504,9 @@ export async function startPage({ active, adminOnly = false, title }) {
     departments: Array.isArray(profile.departments) ? profile.departments : []
   };
   ctx.main = renderShell(ctx, active, title || (NAV.find((n) => n.key === active)?.label ?? ''));
+  // Open the browser console to see where the time goes: sign-in check, profile, then the page's own data
+  console.info(`[WIP load] ${active}: sign-in check ${lap.auth} ms, profile ${lap.profile} ms, page shown at ${Math.round(performance.now())} ms`);
+  ctx.t0 = t0;
   return ctx;
 }
 
