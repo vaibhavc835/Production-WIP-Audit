@@ -133,23 +133,25 @@
   try {
     issAll = (await listIssues()).map((i) => { const ms = issueMs(i), d = ms ? new Date(ms) : null; const day = i.dateKey || (d ? localKey(d) : ''); return { ...i, ms, day, month: day.slice(0, 7) }; }).filter((i) => i.day);
   } catch (e) { issErr = e; }
-  const issMonths = [...new Set(issAll.map((i) => i.month))].sort().reverse();
+  const CUR = localKey(new Date()).slice(0, 7);   // the dashboard opens on the current month
+  const withCur = (arr) => [...new Set([CUR, ...arr])].sort().reverse();
+  const issMonths = withCur(issAll.map((i) => i.month));
   const issUniq = (k) => [...new Set(issAll.map((i) => i[k]).filter(Boolean))].sort();
-  const g = { month: '', area: '', dept: '', cat: '' };
+  const g = { month: CUR, area: '', dept: '', cat: '' };
   const issFiltered = () => issAll.filter((i) => (!g.month || i.month === g.month) && (!g.area || i.area === g.area) && (!g.dept || i.respDept === g.dept) && (!g.cat || i.category === g.cat));
 
   // Improvement data (a failure here must not break the other sections)
   let impAll = [], impErr = null;
   try { impAll = (await listImprovements()).map((i) => ({ ...i, day: i.createdDay || '', month: (i.createdDay || '').slice(0, 7) })).filter((i) => i.day); } catch (e) { impErr = e; }
-  const impMonths = [...new Set(impAll.map((i) => i.month))].sort().reverse();
+  const impMonths = withCur(impAll.map((i) => i.month));
   const impUniq = (k) => [...new Set(impAll.map((i) => i[k]).filter(Boolean))].sort();
-  const h = { month: '', dept: '', cat: '' };
+  const h = { month: CUR, dept: '', cat: '' };
   const impFiltered = () => impAll.filter((i) => (!h.month || i.month === h.month) && (!h.dept || i.dept === h.dept) && (!h.cat || i.category === h.cat));
 
-  const monthsAll = [...new Set(all.map((c) => c.month))].sort().reverse();
+  const monthsAll = withCur(all.map((c) => c.month));
   const deptsAll = [...new Set(all.map((c) => c.department))].sort();
 
-  const f = { month: '', dept: '', line: '' };
+  const f = { month: CUR, dept: '', line: '' };
   const filtered = () => all.filter((c) => (!f.month || c.month === f.month) && (!f.dept || c.department === f.dept) && (!f.line || c.line === f.line));
   const flat = (list) => list.flatMap((c) => c.items.map((i) => ({ c, i, ok: i.status === 'OK' })));
 
@@ -204,6 +206,7 @@
     <div id="capture"></div>
     <section class="tools no-cap" id="tools" aria-label="Download and export"></section>`;
   const cap = main.querySelector('#capture');
+  [['fm', f.month], ['im', g.month], ['hm', h.month]].forEach(([id, v]) => { main.querySelector('#' + id).value = v; });
 
   const syncLines = () => {
     const ls = [...new Set(all.filter((c) => !f.dept || c.department === f.dept).map((c) => c.line))].sort();
@@ -213,11 +216,11 @@
   main.querySelector('#fm').onchange = (e) => { f.month = e.target.value; render(); };
   main.querySelector('#fd').onchange = (e) => { f.dept = e.target.value; syncLines(); render(); };
   main.querySelector('#fl').onchange = (e) => { f.line = e.target.value; render(); };
-  main.querySelector('#fr').onclick = () => { f.month = f.dept = f.line = ''; ['fm', 'fd'].forEach((id) => { main.querySelector('#' + id).value = ''; }); syncLines(); render(); };
+  main.querySelector('#fr').onclick = () => { f.month = CUR; f.dept = f.line = ''; main.querySelector('#fm').value = CUR; main.querySelector('#fd').value = ''; syncLines(); render(); };
   [['im', 'month'], ['ia', 'area'], ['id', 'dept'], ['ic', 'cat']].forEach(([id, k]) => { main.querySelector('#' + id).onchange = (e) => { g[k] = e.target.value; render(); }; });
   [['hm', 'month'], ['hd', 'dept'], ['hc', 'cat']].forEach(([id, k]) => { main.querySelector('#' + id).onchange = (e) => { h[k] = e.target.value; render(); }; });
-  main.querySelector('#hr').onclick = () => { h.month = h.dept = h.cat = ''; ['hm', 'hd', 'hc'].forEach((id) => { main.querySelector('#' + id).value = ''; }); render(); };
-  main.querySelector('#ir').onclick = () => { g.month = g.area = g.dept = g.cat = ''; ['im', 'ia', 'id', 'ic'].forEach((id) => { main.querySelector('#' + id).value = ''; }); render(); };
+  main.querySelector('#hr').onclick = () => { h.month = CUR; h.dept = h.cat = ''; ['hd', 'hc'].forEach((id) => { main.querySelector('#' + id).value = ''; }); main.querySelector('#hm').value = CUR; render(); };
+  main.querySelector('#ir').onclick = () => { g.month = CUR; g.area = g.dept = g.cat = ''; ['ia', 'id', 'ic'].forEach((id) => { main.querySelector('#' + id).value = ''; }); main.querySelector('#im').value = CUR; render(); };
   main.querySelectorAll('#tabs button').forEach((b) => { b.onclick = () => { location.hash = b.dataset.s; }; });
   window.addEventListener('hashchange', route);
   function route() {
@@ -227,6 +230,9 @@
     main.querySelector('#filters').hidden = !(section === 'overall' || section === 'inventory');
     main.querySelector('#ifilters').hidden = section !== 'issue';
     main.querySelector('#mfilters').hidden = section !== 'improvement';
+    const okX = ctx.isAdmin || ctx.profile?.canExport === true;   // Export permission is set per user in Admin Control
+    const xc = main.querySelector('#xCard'), ic = main.querySelector('#iCard');
+    if (xc) xc.hidden = !(okX && section === 'inventory'); if (ic) ic.hidden = !(okX && section === 'issue');
     render();
   }
 
@@ -560,12 +566,12 @@
       <p class="sub">Saves the section you are viewing, with the current filters, as a PDF or a picture.</p>
       <div class="row"><button type="button" class="btn btn-primary" id="dPdf">${icon('upload')}<span>Download PDF</span></button>
       <button type="button" class="btn btn-ghost" id="dPng"><span>Download image (PNG)</span></button></div><div class="hint" id="dMsg"></div></article>
-    <article class="cc"><h3>Export inventory data</h3>
+    <article class="cc" id="xCard" hidden><h3>Export inventory data</h3>
       <p class="sub">Excel file with every station check, plus a summary by department and month.</p>
       <div class="fg"><div><label class="l" for="xm">Month</label><select id="xm"><option value="">All months</option>${monthsAll.map((m) => `<option value="${m}">${monthName(m)}</option>`).join('')}</select></div>
       <div><label class="l" for="xd">Department</label><select id="xd"><option value="">All departments</option>${deptsAll.map((d) => `<option>${esc(d)}</option>`).join('')}</select></div></div>
       <div class="row"><button type="button" class="btn btn-primary" id="xGo"><span>Export Excel</span></button></div><div class="hint" id="xMsg"></div></article>
-    <article class="cc"><h3>Export issue data</h3>
+    <article class="cc" id="iCard" hidden><h3>Export issue data</h3>
       <p class="sub">Excel file with every issue in the tracker layout, plus a summary by responsibility.</p>
       <div class="fg"><div><label class="l" for="im2">Month</label><select id="im2"><option value="">All months</option>${issMonths.map((m) => `<option value="${m}">${monthName(m)}</option>`).join('')}</select></div>
       <div><label class="l" for="id2">Responsibility</label><select id="id2"><option value="">All responsibilities</option>${issUniq('respDept').map((d) => `<option>${esc(d)}</option>`).join('')}</select></div></div>

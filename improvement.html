@@ -76,7 +76,7 @@
   main.innerHTML = '<div class="imp" id="imp"><div class="empty">Loading…</div></div>';
   const root = main.querySelector('#imp');
 
-  let users = [], setup = null, ideas = [], view = 'me';
+  let users = [], setup = null, ideas = [], view = 'new';   // the page opens on the New idea form
   const F = { q: '', status: '', dept: '', cat: '', from: '', to: '' };
   async function loadAll() {
     [users, setup, ideas] = await Promise.all([listUsers(), getImprovementSetup(), listImprovements()]);
@@ -105,10 +105,11 @@
       && (!q || [i.no, i.byName, i.dept, i.line, i.station, i.issueDetails, i.plan, i.teamName].join(' ').toLowerCase().includes(q)));
   }
   function showList() {
+    if (view === 'new') { newIdea(); return; }
     const depts = [...new Set(setup.lines.map((l) => l.dept))];
     root.innerHTML = `<div class="page-head"><div><h1>Improvement</h1><p class="sub">Suggest an improvement, get it approved, complete it and check it stays effective.</p></div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="btn btn-ghost" id="exp">Export to Excel</button><button type="button" class="btn btn-primary" id="new">New idea</button></div></div>
-      <div class="tabs"><button type="button" class="tab ${view === 'me' ? 'on' : ''}" data-v="me">For me</button><button type="button" class="tab ${view === 'all' ? 'on' : ''}" data-v="all">All ideas</button></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">${ctx.isAdmin || ctx.profile?.canExport ? '<button type="button" class="btn btn-ghost" id="exp">Export to Excel</button>' : ''}</div></div>
+      <div class="tabs"><button type="button" class="tab" data-v="new">+ New idea</button><button type="button" class="tab ${view === 'me' ? 'on' : ''}" data-v="me">For me</button><button type="button" class="tab ${view === 'all' ? 'on' : ''}" data-v="all">All ideas</button></div>
       <div class="flt"><div class="s"><label class="l" for="fq">Search</label><input id="fq" value="${esc(F.q)}" placeholder="Idea no., name, station, text"></div>
         <div><label class="l" for="fs">Status</label><select id="fs"><option value="">All</option>${Object.entries(STATUS).map(([k, v]) => `<option value="${k}"${F.status === k ? ' selected' : ''}>${v[0]}</option>`).join('')}</select></div>
         <div><label class="l" for="fdp">Department</label><select id="fdp">${opt(depts, F.dept, 'All')}</select></div>
@@ -116,8 +117,7 @@
         <div><label class="l" for="ff">From</label><input type="date" id="ff" value="${F.from}"></div><div><label class="l" for="ft">To</label><input type="date" id="ft" value="${F.to}"></div></div>
       <div id="lst"></div>`;
     root.querySelectorAll('.tab').forEach((b) => { b.onclick = () => { view = b.dataset.v; showList(); }; });
-    root.querySelector('#new').onclick = newIdea;
-    root.querySelector('#exp').onclick = exportExcel;
+    if (root.querySelector('#exp')) root.querySelector('#exp').onclick = exportExcel;
     const map = { fq: 'q', fs: 'status', fdp: 'dept', fc: 'cat', ff: 'from', ft: 'to' };
     Object.entries(map).forEach(([id, k]) => { const el = root.querySelector('#' + id); el.oninput = el.onchange = () => { F[k] = el.value; drawRows(); }; });
     drawRows();
@@ -137,9 +137,7 @@
   /* ---------- new idea ---------- */
   function newIdea() {
     const depts = [...new Set(setup.lines.map((l) => l.dept))], O = '__other__';
-    const m = openModal({
-      title: 'New improvement idea', wide: true,
-      html: `<div class="iph" style="border:0"><div class="f">
+    const formHtml = `<div class="iph" style="border:0"><div class="f">
         <div class="note">Idea date and your name are filled in automatically. The idea number is created from the line you choose.</div>
         <div class="r2"><div><label class="l" for="n_dept">Implementation department *</label><select id="n_dept">${opt(depts, '', 'Choose')}</select></div>
           <div><label class="l" for="n_line">Implementation line *</label><select id="n_line"><option value="">Choose the department first</option></select></div></div>
@@ -152,9 +150,8 @@
         <div><span class="l">Improvement will be done by *</span><div class="opts"><label><input type="radio" name="n_by" value="Self"> Self</label><label><input type="radio" name="n_by" value="Team"> Team</label></div></div>
         <div><label class="l" for="n_ben">Benefit of improvement *</label><textarea id="n_ben" rows="2" maxlength="500"></textarea></div>
         <div class="note" id="n_photo">Before photo: after you submit, save it in the common folder with the name <b>IdeaNo-B</b>. The exact name is shown once the idea number is created.</div>
-        <div class="err" id="n_err" hidden></div></div></div>`,
-      actions: [{ label: 'Cancel', onClick: (x) => x.close() }, { label: 'Submit idea', kind: 'primary', id: 'go', onClick: submit }],
-      onOpen: (x) => {
+        <div class="err" id="n_err" hidden></div></div></div>`;
+    const onOpen = (x) => {
         const $ = (id) => x.body.querySelector('#' + id);
         $('n_dept').onchange = () => { const ls = setup.lines.filter((l) => l.dept === $('n_dept').value); $('n_line').innerHTML = opt(ls.map((l) => l.line), '', 'Choose'); $('n_line').onchange(); };
         $('n_line').onchange = () => {
@@ -162,8 +159,14 @@
           $('n_st').innerHTML = opt(sts, '', 'Choose') + `<option value="${O}">Other (type below)</option>`; $('n_st').onchange();
         };
         $('n_st').onchange = () => { $('n_st_o').hidden = $('n_st').value !== O; };
-      }
-    });
+    };
+    root.innerHTML = `<div class="page-head"><div><h1>Improvement</h1><p class="sub">Suggest an improvement, get it approved, complete it and check it stays effective.</p></div></div>
+      <div class="tabs"><button type="button" class="tab on" data-v="new">+ New idea</button><button type="button" class="tab" data-v="me">For me</button><button type="button" class="tab" data-v="all">All ideas</button></div>
+      <div class="iph" id="nbox" style="padding:4px 4px 12px">${formHtml}<div style="display:flex;justify-content:flex-end;padding:0 12px"><button type="button" class="btn btn-primary" id="n_go">Submit idea</button></div></div>`;
+    root.querySelectorAll('.tab').forEach((b) => { b.onclick = () => { view = b.dataset.v; showList(); }; });
+    const box = root.querySelector('#nbox'), x = { body: box, close: () => { view = 'me'; } };
+    onOpen(x);
+    root.querySelector('#n_go').onclick = (ev) => submit(x, ev.currentTarget);
     async function submit(x, btn) {
       const $ = (id) => x.body.querySelector('#' + id), err = $('n_err'); err.hidden = true;
       const dept = $('n_dept').value, line = $('n_line').value, station = $('n_st').value === O ? clean($('n_st_o').value) : $('n_st').value;

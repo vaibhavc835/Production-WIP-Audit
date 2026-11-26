@@ -28,7 +28,7 @@
 <script type="module">
   import {
     startPage, icon, esc, toast, openModal, friendlyError,
-    listStations, listColl, getMaster, auditPlacesFromMaster, listAuditForms, listAuditResponses, submitAudit, dayKeyOf
+    listStations, listColl, getMaster, auditPlacesFromMaster, listAuditForms, listAuditResponses, submitAudit, dayKeyOf, scopeLabel
   } from './js/wip-core.js';
   import { renderSheet, sheetTableHtml } from './js/audit-sheet.js';
 
@@ -65,6 +65,25 @@
   .aud .pill.red{background:#fee2e2;color:#991b1b}.aud .pill.green{background:#dcfce7;color:#166534}.aud .pill.grey{background:#e2e8f0}
   .aud .big{font-size:34px;font-weight:700}
   .aud .rtbl td small{color:var(--muted)}
+  .aud .kp{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:4px 0 16px}
+  .aud .kp .k{background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 14px;border-left:5px solid #cbd5e1}
+  .aud .kp .k small{display:block;color:var(--muted);font-weight:600;font-size:12px}.aud .kp .k b{font-size:26px;font-variant-numeric:tabular-nums}
+  .aud .kp .k.good{border-left-color:#16a34a}.aud .kp .k.mid{border-left-color:#d97706}.aud .kp .k.low{border-left-color:#dc2626}
+  .aud .sbar{margin:0 0 12px}.aud .sbar input{max-width:360px}
+  .aud .fcard{border-top:1px solid var(--line);border-left:6px solid var(--navy);gap:8px;transition:transform .12s,box-shadow .12s}.aud .fcard:hover{transform:translateY(-2px)}
+  .aud .fcard .ft{display:flex;align-items:center;gap:8px}.aud .fcard .fic{width:32px;height:32px;border-radius:9px;background:#e0f2fe;color:#075985;display:grid;place-items:center}.aud .fcard .fic svg{width:18px;height:18px}
+  .aud .fcard .fk{font-size:12px;font-weight:700;color:#075985}.aud .fcard .fd{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .aud .fcard .fm{font-size:12.5px}.aud .fcard .ff2{display:flex;align-items:center;gap:10px;margin-top:4px;padding-top:10px;border-top:1px dashed var(--line);color:var(--ink2)}
+  .aud .fcard .fl2{font-size:13px;line-height:1.3;flex:1}.aud .fcard .fl2 small{color:var(--muted)}
+  .aud .fcard .go{background:var(--navy);color:#fff;border-radius:999px;padding:6px 16px;font-weight:600;font-size:13px}
+  .aud .ring{--c:#94a3b8;border-radius:50%;display:inline-grid;place-items:center;flex:none;background:conic-gradient(var(--c) calc(var(--p)*1%),#e2e8f0 0);position:relative}
+  .aud .ring::before{content:'';position:absolute;inset:15%;background:#fff;border-radius:50%}.aud .ring b{position:relative;font-size:11px;color:#0f172a}
+  .aud .ring.good{--c:#16a34a}.aud .ring.mid{--c:#d97706}.aud .ring.low{--c:#dc2626}
+  .aud .tabs2{display:flex;gap:6px;margin:0 0 10px}.aud .tabs2 button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 14px;font-weight:600;font-size:13.5px;cursor:pointer}.aud .tabs2 button.on{background:var(--navy);color:#fff;border-color:var(--navy)}
+  .aud .rl{display:flex;flex-direction:column;gap:8px}.aud .rr{display:flex;align-items:center;gap:12px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 14px;text-align:left;cursor:pointer;width:100%}.aud .rr:hover{background:#f8fafc}
+  .aud .rr .rm{flex:1;min-width:0}.aud .rr .rm b{display:block}.aud .rr .rm small{color:var(--muted)}.aud .rr .rc{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+  .aud .hero{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:10px}.aud .hero .ring{width:84px;height:84px}.aud .hero .ring b{font-size:18px}
+  @media (max-width:640px){.aud .rr{flex-wrap:wrap}.aud .rr .rc{justify-content:flex-start}}
   @media (max-width:640px){.aud .gc{padding:14px}.aud .opt span{padding:8px 13px}}
   `;
   document.head.appendChild(st);
@@ -88,23 +107,47 @@
   }
   try { await loadBase(); } catch (e) { root.innerHTML = `<div class="empty"><b>Could not load the audit forms.</b><p>${esc(friendlyError(e))}</p></div>`; throw e; }
 
-  /* ---------- list of forms and recent responses ---------- */
+  /* ---------- landing: summary, forms, results ---------- */
+  const scoreTone = (v) => (v == null ? 'na' : v >= 90 ? 'good' : v >= 70 ? 'mid' : 'low');
+  const ring = (v, size = 46) => `<span class="ring ${scoreTone(v)}" style="--p:${v == null ? 0 : v};width:${size}px;height:${size}px"><b>${v == null ? '–' : v + '%'}</b></span>`;
+  const todayKey = () => dayKeyOf(new Date());
+  let LF = { q: '', mine: false, form: '' };
   async function showList() {
-    root.innerHTML = `<div class="page-head"><div><h1>Audit</h1><p class="sub">Choose an audit form, fill it in on the shop floor and submit.</p></div>
+    root.innerHTML = `<div class="page-head"><div><h1>Audit</h1><p class="sub">Pick a form, fill it in on the shop floor and submit. Your name, the date and the time are recorded for you.</p></div>
       ${ctx.isAdmin ? '<a class="btn btn-ghost" href="admin.html#auditforms">Manage audit forms</a>' : ''}</div>
-      ${forms.length ? `<div class="forms">${forms.map((f) => `<button type="button" class="fcard" data-id="${esc(f.id)}"><b>${esc(f.title)}</b><span>${esc(f.description || '')}</span><span>${f.kind === 'sheet' ? (f.rowMode === 'free' ? 'Checksheet · add rows as you go' : 'Checksheet · ' + (f.rows || []).filter((x) => !x.g).length + ' check points') : (f.points || []).length + ' audit points'}</span></button>`).join('')}</div>`
-        : `<div class="empty"><b>No audit form yet.</b><p>${ctx.isAdmin ? 'Create one in Admin Control, Audit Forms.' : 'The administrator has not created an audit form yet.'}</p></div>`}
-      <h2 class="sec">Recent responses</h2><div id="recent"><div class="empty">Loading…</div></div>`;
-    root.querySelectorAll('.fcard').forEach((b) => { b.onclick = () => { location.hash = 'form=' + b.dataset.id; }; });
-    const box = root.querySelector('#recent');
-    try {
-      const rows = await listAuditResponses({ max: 10 });
-      box.innerHTML = rows.length ? `<div class="tbl-wrap"><table class="tbl rtbl"><thead><tr><th>Date and time</th><th>Audit form</th><th>Department</th><th>Line</th><th>Audited by</th><th class="num">Meets</th><th class="num">Does not meet</th><th class="num">Score</th></tr></thead><tbody>
-        ${rows.map((r) => `<tr data-id="${esc(r.id)}" style="cursor:pointer"><td data-label="Date">${esc(when(r))}</td><td data-label="Form"><b>${esc(r.formTitle)}</b></td><td data-label="Department">${esc(r.department)}</td><td data-label="Line">${esc(r.line)}</td><td data-label="Audited by">${esc(r.auditorName)}</td>
-          <td class="num" data-label="Meets">${r.counts?.ok ?? 0}</td><td class="num" data-label="Does not meet">${r.counts?.nok ? `<span class="pill red">${r.counts.nok}</span>` : 0}</td><td class="num" data-label="Score">${r.score != null ? r.score + '%' : '-'}</td></tr>`).join('')}</tbody></table></div><div class="note">Latest ${rows.length} responses from everyone. Select a row to see the details.</div>`
-        : '<div class="empty">No responses yet.</div>';
-      box.querySelectorAll('tr[data-id]').forEach((tr) => { tr.onclick = () => detail(rows.find((r) => r.id === tr.dataset.id)); });
-    } catch (e) { box.innerHTML = `<div class="empty">${esc(friendlyError(e))}</div>`; }
+      <div class="kp" id="kp"></div>
+      <div class="sbar"><input id="fq" type="search" placeholder="Search audit forms" aria-label="Search audit forms" value="${esc(LF.q)}"></div>
+      <div class="forms" id="fl"></div>
+      <h2 class="sec">Audit results</h2>
+      <div class="tabs2"><button type="button" data-m="0" class="${LF.mine ? '' : 'on'}">Everyone</button><button type="button" data-m="1" class="${LF.mine ? 'on' : ''}">My audits</button></div>
+      <div id="recent"><div class="empty">Loading…</div></div>`;
+    let rows = [];
+    try { rows = await listAuditResponses({ max: 300 }); } catch (e) { root.querySelector('#recent').innerHTML = `<div class="empty">${esc(friendlyError(e))}</div>`; }
+    const month = todayKey().slice(0, 7), mm = rows.filter((r) => (r.auditDate || r.dateKey || '').startsWith(month));
+    const scored = mm.filter((r) => r.score != null), avg = scored.length ? Math.round(scored.reduce((a, r) => a + r.score, 0) / scored.length) : null;
+    const nok = mm.reduce((a, r) => a + (r.counts?.nok || 0), 0), mine = mm.filter((r) => r.auditorUid === ctx.uid).length;
+    root.querySelector('#kp').innerHTML = [['Audits this month', mm.length, ''], ['Average score', avg == null ? '–' : avg + '%', scoreTone(avg)], ['Findings (not OK)', nok, nok ? 'low' : 'good'], ['Done by you', mine, '']]
+      .map(([l, v, t]) => `<div class="k ${t}"><small>${l}</small><b>${v}</b></div>`).join('');
+    const lastOf = (id) => rows.find((r) => r.formId === id);
+    const drawForms = () => {
+      const q = LF.q.toLowerCase(), list = forms.filter((f) => !q || (f.title + ' ' + (f.description || '') + ' ' + (f.formNo || '')).toLowerCase().includes(q));
+      root.querySelector('#fl').innerHTML = list.length ? list.map((f) => { const l = lastOf(f.id), n = f.kind === 'sheet' ? (f.rowMode === 'free' ? 'Checksheet · add rows as you go' : 'Checksheet · ' + (f.rows || []).filter((x) => !x.g).length + ' check points') : (f.points || []).length + ' audit points';
+        return `<button type="button" class="fcard" data-id="${esc(f.id)}"><span class="ft"><span class="fic">${icon('clipboard')}</span><span class="fk">${f.kind === 'sheet' ? 'Checksheet' : 'Audit'}</span></span><b>${esc(f.title)}</b>
+          ${f.description ? `<span class="fd">${esc(f.description)}</span>` : ''}<span class="fm">${esc(n)}${f.formNo ? ' · ' + esc(f.formNo) : ''}</span>
+          <span class="ff2">${l ? `${ring(l.score, 38)}<span class="fl2">Last audit ${esc(when(l).slice(0, 11))}<br><small>by ${esc(l.auditorName)}</small></span>` : '<span class="fl2"><small>Not audited yet</small></span>'}<span class="go">Start</span></span></button>`; }).join('')
+        : `<div class="empty"><b>${forms.length ? 'No form matches.' : 'No audit form yet.'}</b><p>${forms.length ? 'Try another word.' : (ctx.isAdmin ? 'Create one in Admin Control, Audit Forms.' : 'The administrator has not created an audit form yet.')}</p></div>`;
+      root.querySelectorAll('.fcard').forEach((b) => { b.onclick = () => { location.hash = 'form=' + b.dataset.id; }; });
+    };
+    const drawRows = () => {
+      const list = rows.filter((r) => !LF.mine || r.auditorUid === ctx.uid).slice(0, 30), box = root.querySelector('#recent');
+      box.innerHTML = list.length ? `<div class="rl">${list.map((r) => `<button type="button" class="rr" data-id="${esc(r.id)}">${ring(r.score, 44)}<span class="rm"><b>${esc(r.formTitle)}</b><small>${esc(when(r))}${r.department ? ' · ' + esc(r.department) + (r.line ? ' › ' + esc(r.line) : '') : ''} · ${esc(r.auditorName)}</small></span>
+        <span class="rc"><span class="pill green">${r.counts?.ok ?? 0} OK</span>${r.counts?.nok ? `<span class="pill red">${r.counts.nok} not OK</span>` : ''}</span></button>`).join('')}</div><div class="note">Latest ${list.length} results. Select one to see the details.</div>`
+        : '<div class="empty">No audits yet.</div>';
+      box.querySelectorAll('.rr').forEach((tr) => { tr.onclick = () => detail(rows.find((r) => r.id === tr.dataset.id)); });
+    };
+    drawForms(); drawRows();
+    root.querySelector('#fq').oninput = (e) => { LF.q = e.target.value; drawForms(); };
+    root.querySelectorAll('.tabs2 button').forEach((b) => { b.onclick = () => { LF.mine = b.dataset.m === '1'; root.querySelectorAll('.tabs2 button').forEach((x) => x.classList.toggle('on', x === b)); drawRows(); }; });
   }
 
   function detail(r) {
@@ -112,7 +155,7 @@
     if (r.kind === 'sheet') {
       openModal({
         title: r.formTitle, wide: true,
-        html: `<p class="hint">${esc(when(r))} · audit date ${esc(r.auditDate || '')}${r.department ? ' · ' + esc(r.department) + ' · ' + esc(r.line) : ''} · audited by ${esc(r.auditorName)}${r.auditorEmployeeId ? ' (' + esc(r.auditorEmployeeId) + ')' : ''}</p>
+        html: `<div class="hero">${ring(r.score)}<div><span class="pill green">${r.counts?.ok ?? 0} OK</span> <span class="pill red">${r.counts?.nok ?? 0} NOT OK</span></div></div><p class="hint">${esc(when(r))} · audit date ${esc(r.auditDate || '')}${r.auditTime ? ' ' + esc(r.auditTime) : ''}${r.durationMin ? ' · took ' + r.durationMin + ' min' : ''}${r.auditorArea ? ' · area ' + esc(r.auditorArea) : ''}${r.department ? ' · ' + esc(r.department) + ' · ' + esc(r.line) : ''} · audited by ${esc(r.auditorName)}${r.auditorEmployeeId ? ' (' + esc(r.auditorEmployeeId) + ')' : ''}</p>
           ${(r.headerValues || []).filter((h) => h.value).length ? `<p>${r.headerValues.filter((h) => h.value).map((h) => `<b>${esc(h.label)}:</b> ${esc(h.value)}`).join(' &nbsp; ')}</p>` : ''}
           <p><span class="pill green">${r.counts?.ok ?? 0} OK</span> <span class="pill red">${r.counts?.nok ?? 0} NOT OK</span> ${r.score != null ? `<b style="margin-left:8px">Score ${r.score}%</b>` : ''}</p>
           ${sheetTableHtml(r.cols || [], r.rows || [])}`,
@@ -122,7 +165,7 @@
     }
     openModal({
       title: r.formTitle, wide: true,
-      html: `<p class="hint">${esc(when(r))} · ${esc(r.department)}${r.deptOther ? ' (other)' : ''} · ${esc(r.line)}${r.lineOther ? ' (other)' : ''} · audited by ${esc(r.auditorName)}${r.auditorEmployeeId ? ' (' + esc(r.auditorEmployeeId) + ')' : ''}</p>
+      html: `<div class="hero">${ring(r.score)}<div><span class="pill green">${r.counts?.ok ?? 0} meet</span> <span class="pill red">${r.counts?.nok ?? 0} do not meet</span> <span class="pill grey">${r.counts?.na ?? 0} not applicable</span></div></div><p class="hint">${esc(when(r))} · ${esc(r.department)}${r.deptOther ? ' (other)' : ''} · ${esc(r.line)}${r.lineOther ? ' (other)' : ''} · audited by ${esc(r.auditorName)}${r.auditorEmployeeId ? ' (' + esc(r.auditorEmployeeId) + ')' : ''}</p>
         <p><span class="pill green">${r.counts?.ok ?? 0} meet</span> <span class="pill red">${r.counts?.nok ?? 0} do not meet</span> <span class="pill grey">${r.counts?.na ?? 0} not applicable</span> ${r.score != null ? `<b style="margin-left:8px">Score ${r.score}%</b>` : ''}</p>
         <div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th>Audit point</th><th>Criteria</th><th>Observation</th><th>Remark</th></tr></thead><tbody>
         ${(r.answers || []).map((a, i) => `<tr><td data-label="#">${i + 1}</td><td data-label="Audit point"><b>${esc(a.point)}</b></td><td data-label="Criteria">${esc(a.criteria)}</td><td data-label="Observation"><span class="pill ${RESULT[a.result]?.[1] || ''}">${esc(RESULT[a.result]?.[0] || a.result)}</span></td><td data-label="Remark">${esc(a.remark || '')}</td></tr>`).join('')}</tbody></table></div>`,
@@ -134,8 +177,8 @@
   function showSheet(f) {
     root.innerHTML = '<div style="max-width:1200px;margin:0 auto"><a href="#" id="back" style="font-size:14px">← All audit forms</a><div id="sheetHost"></div></div>';
     root.querySelector('#back').onclick = (e) => { e.preventDefault(); location.hash = ''; };
-    renderSheet(root.querySelector('#sheetHost'), f, { places, ctx, onSubmit: async (d) => {
-      await submitAudit({ formId: f.id, formTitle: f.title, ...d, auditorName: ctx.name, auditorEmployeeId: ctx.employeeId || '', dateKey: dayKeyOf(new Date()) });
+    renderSheet(root.querySelector('#sheetHost'), f, { places, ctx: { ...ctx, area: scopeLabel(ctx.profile || {}) }, onSubmit: async (d) => {
+      await submitAudit({ formId: f.id, formTitle: f.title, ...d, ...(f.auto?.area ? { auditorArea: scopeLabel(ctx.profile || {}) } : {}), auditorName: ctx.name, auditorEmployeeId: ctx.employeeId || '', dateKey: dayKeyOf(new Date()) });
       done(f, d.counts, d.score, true);
     } });
   }

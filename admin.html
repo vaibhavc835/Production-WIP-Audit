@@ -33,7 +33,7 @@
     getAdminMessage, setAdminMessage, DEFAULT_ADMIN_MESSAGE,
     listInventoryChecks, getInventoryCheck, updateInventoryCheck, deleteInventoryCheck,
     listStationsByDepartment, saveInventoryCheck, deleteInventoryChecksBulk, checkDay,
-    ORG_LEVELS, levelLabel, lvOf, getMaster, masterDepts, masterLines, masterStationNames, scopeOf, scopeLabel, pageOptions, hasRealMailbox, sendResetLink, RESET_MAILBOX, getTempPassword, STORE_PASSWORDS_FOR_TESTING
+    ORG_LEVELS, levelLabel, lvOf, getMaster, allMasterDepts, masterDepts, masterLines, masterStationNames, scopeOf, scopeLabel, pageOptions, hasRealMailbox, sendResetLink, RESET_MAILBOX, getTempPassword, STORE_PASSWORDS_FOR_TESTING
   } from './js/wip-core.js';
 
   const ctx = await startPage({ active: 'admin', adminOnly: true, title: 'Admin Control' });
@@ -93,6 +93,7 @@
       <button type="button" class="tile" data-t="issuesetup"><span class="ico">${icon('alert')}</span><span><b>Issue Setup</b><small>Masters, lead time, fields</small></span></button>
       <button type="button" class="tile" data-t="improvementsetup"><span class="ico">${icon('trend')}</span><span><b>Improvement Setup</b><small>Lines, codes, stations, users</small></span></button>
       <button type="button" class="tile" data-t="auditforms"><span class="ico">${icon('clipboard')}</span><span><b>Audit Forms</b><small>Create audit checklists</small></span></button>
+      <button type="button" class="tile" data-t="database"><span class="ico">${icon('db')}</span><span><b>Database</b><small>Download all, delete trial data</small></span></button>
       <button type="button" class="tile" data-t="message"><span class="ico">${icon('msg')}</span><span><b>Admin Message</b><small>Shown on Home</small></span></button>
     </div>
     <section id="panel" class="panel"></section>`;
@@ -108,9 +109,9 @@
   main.querySelectorAll('#tabs .tile').forEach((t) => { t.onclick = () => { location.hash = t.dataset.t; }; });
   const route = () => {
     const h = location.hash.replace('#', '');
-    state.tab = ['users', 'inventory', 'master', 'history', 'issuesetup', 'improvementsetup', 'auditforms', 'message'].includes(h) ? h : 'users';
+    state.tab = ['users', 'inventory', 'master', 'history', 'issuesetup', 'improvementsetup', 'auditforms', 'database', 'message'].includes(h) ? h : 'users';
     updateTiles();
-    ({ users: renderUsers, inventory: renderInventory, master: renderMasterTab, history: renderHistory, issuesetup: renderIssueSetupTab, improvementsetup: renderImpSetupTab, auditforms: renderAuditTab, message: renderMessage })[state.tab]();
+    ({ users: renderUsers, inventory: renderInventory, master: renderMasterTab, history: renderHistory, issuesetup: renderIssueSetupTab, improvementsetup: renderImpSetupTab, auditforms: renderAuditTab, database: renderDatabaseTab, message: renderMessage })[state.tab]();
   };
   window.addEventListener('hashchange', route);
 
@@ -217,7 +218,7 @@
         <td data-label="Assigned to">${esc(scopeLabel(u) || '-')}</td>
         <td data-label="Reports to">${esc(state.users.find((z) => z.uid === u.reportsTo)?.name || '-')}</td>
         <td data-label="Departments">${esc((u.departments || []).join(', '))}</td>
-        <td data-label="Page access">${u.role === 'admin' || !Array.isArray(u.pages) ? 'All pages' : `<span title="${esc(pageOptions().filter((p) => u.pages.includes(p.key)).map((p) => p.label).join(', ') || 'Home only')}">${u.pages.filter((k) => pageOptions().some((p) => p.key === k)).length} of ${pageOptions().length}</span>`}</td>
+        <td data-label="Page access">${u.role === 'admin' || u.canExport ? '<span class="badge" title="Can export data">Export</span> ' : ''}${u.role === 'admin' || !Array.isArray(u.pages) ? 'All pages' : `<span title="${esc(pageOptions().filter((p) => u.pages.includes(p.key)).map((p) => p.label).join(', ') || 'Home only')}">${u.pages.filter((k) => pageOptions().some((p) => p.key === k)).length} of ${pageOptions().length}</span>`}</td>
         <td data-label="Status"><span class="badge ${off ? 'off' : ''}">${off ? 'Inactive' : 'Active'}</span></td>
         <td class="acts-td"><div class="acts">
           <button type="button" class="btn btn-ghost btn-sm" data-e="${esc(u.uid)}">${icon('edit')}<span>Edit</span></button>
@@ -284,8 +285,9 @@
         <div><label class="l" for="f_role">Role</label><select id="f_role" ${me ? 'disabled' : ''}><option value="user" ${u?.role !== 'admin' ? 'selected' : ''}>User</option><option value="admin" ${u?.role === 'admin' ? 'selected' : ''}>Admin</option></select>${me ? '<div class="hint">You cannot change your own role.</div>' : ''}</div>
         ${edit ? '' : `<div class="full"><label class="l" for="f_pw">Starting password</label><div class="row"><input id="f_pw" type="text" autocomplete="off"><button type="button" class="btn btn-ghost" id="f_gen">Generate</button></div><div class="hint">Tell the user this password. They will be asked to change it after signing in.</div></div>`}
         <div class="full"><label class="l">Access departments (tick one or more)</label>
-          <div class="deptgrid" id="f_deps">${DEPARTMENTS.map((d) => `<label><input type="checkbox" value="${esc(d)}" ${(u?.departments || []).includes(d) || ((u?.departments || []).includes('All') && d === 'All') ? 'checked' : ''}> ${d === 'All' ? 'All departments' : esc(d)}</label>`).join('')}</div>
+          <div class="deptgrid" id="f_deps">${[...new Set(['All', ...allMasterDepts(MST), ...DEPARTMENTS, ...(u?.departments || [])])].map((d) => `<label><input type="checkbox" value="${esc(d)}" ${(u?.departments || []).includes(d) || ((u?.departments || []).includes('All') && d === 'All') ? 'checked' : ''}> ${d === 'All' ? 'All departments' : esc(d)}</label>`).join('')}</div>
           <style>.deptgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px 12px;padding:10px;border:1px solid var(--line);border-radius:10px;max-height:190px;overflow:auto}.deptgrid label{display:flex;gap:6px;align-items:center;font-size:14px}.deptgrid input{width:auto}</style></div>
+        <div class="full"><label class="pgall" style="margin:0"><input type="checkbox" id="f_exp" ${u?.canExport || u?.role === 'admin' ? 'checked' : ''} ${u?.role === 'admin' ? 'disabled' : ''}> Can download (export) data to Excel</label><div class="hint">Controls the Export buttons on the Dashboard, Issue Report and Improvement pages. Administrators can always export.</div></div>
         <div class="full"><label class="l">Page access</label>
           <label class="pgall"><input type="checkbox" id="f_pall" ${!Array.isArray(u?.pages) ? 'checked' : ''}> All pages (new pages are included automatically)</label>
           <div class="deptgrid" id="f_pages">${pageOptions().map((p) => `<label><input type="checkbox" value="${esc(p.key)}" ${!Array.isArray(u?.pages) || u.pages.includes(p.key) ? 'checked' : ''}> ${esc(p.label)}</label>`).join('')}</div>
@@ -355,14 +357,14 @@
       btn.disabled = true; x.locked = true;
       try {
         if (edit) {
-          const data = { name, departments, pages, level: lvOf($('f_lv').value), reportsTo: chosenRt, ...scopeOf($('f_lv').value, { dept: $('f_sd').value, line: $('f_sl').value, station: $('f_ss').value }), ...(me ? {} : { role }), ...(idEditable ? { employeeId: id } : {}) };
+          const data = { name, departments, pages, canExport: $('f_exp').checked, level: lvOf($('f_lv').value), reportsTo: chosenRt, ...scopeOf($('f_lv').value, { dept: $('f_sd').value, line: $('f_sl').value, station: $('f_ss').value }), ...(me ? {} : { role }), ...(idEditable ? { employeeId: id } : {}) };
           await updateUser(u.uid, data); Object.assign(u, data);
         } else {
           const password = $('f_pw').value;
           if (password.length < 6) { err.textContent = 'The starting password needs at least 6 characters.'; btn.disabled = false; x.locked = false; return; }
           if (state.users.some((z) => String(z.employeeId) === id)) { err.textContent = 'This user ID is already in the list.'; btn.disabled = false; x.locked = false; return; }
           const nextNo = Math.max(0, ...state.users.map((z) => Number(z.userNo) || 0)) + 1;
-          state.users.push(await createUser({ employeeId: id, name, password, role, departments, pages, userNo: nextNo, level: lvOf($('f_lv').value), reportsTo: chosenRt, scopeDept: $('f_sd').value, scopeLine: $('f_sl').value, scopeStation: $('f_ss').value }));
+          state.users.push(await createUser({ employeeId: id, name, password, role, departments, pages, canExport: $('f_exp').checked, userNo: nextNo, level: lvOf($('f_lv').value), reportsTo: chosenRt, scopeDept: $('f_sd').value, scopeLine: $('f_sl').value, scopeStation: $('f_ss').value }));
         }
         x.locked = false; x.close(); updateTiles(); drawUsers(); toast(edit ? 'Changes saved.' : 'User added.');
       } catch (e) { err.textContent = friendlyError(e); btn.disabled = false; x.locked = false; }
@@ -1436,6 +1438,15 @@
       const m = await import('./js/audit-admin.js');
       if (state.tab !== 'auditforms') return;
       await m.renderAuditAdmin(panel, ctx);
+    } catch (e) { panel.innerHTML = errorBox(e); }
+  }
+
+  async function renderDatabaseTab() {
+    panel.innerHTML = '<div class="empty">Loading…</div>';
+    try {
+      const m = await import('./js/database-admin.js');
+      if (state.tab !== 'database') return;
+      await m.renderDatabase(panel, ctx);
     } catch (e) { panel.innerHTML = errorBox(e); }
   }
 

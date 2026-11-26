@@ -30,7 +30,7 @@
   import {
     startPage, icon, esc, toast, openModal, confirmBox, friendlyError,
     listUsers, listColl, listIssueStations, getIssueSetup, listIssues, listIssuesAtStation, createIssue, submitContainment, returnIssue, approveIssue, signoffIssue, updateIssue,
-    buildRoute, repeatInfo, lvOf, issueRole, currentLevel, issueMs, issueNo, repeatKey, fmtDur, levelLabel, dayKeyOf, weekMonthOf, DEFAULT_LEAD
+    buildRoute, getMaster, masterLines, repeatInfo, lvOf, issueRole, currentLevel, issueMs, issueNo, repeatKey, fmtDur, levelLabel, dayKeyOf, weekMonthOf, DEFAULT_LEAD
   } from './js/wip-core.js';
 
   const ctx = await startPage({ active: 'issue', title: 'Issue Report' });
@@ -68,6 +68,24 @@
   .rep{border-radius:10px;padding:9px 12px;font-size:13.5px;margin:10px 0}.rep.bad{background:#fee2e2;color:#7f1d1d}.rep.ok{background:#dcfce7;color:#14532d}
   .est{background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:10px 12px;font-size:13.5px;margin:10px 0}.est b{font-size:15px}
   .iss .psmrow td small{color:var(--muted)}
+  .iss .idet{display:flex;flex-direction:column;gap:12px}
+  .iss .ihead{display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;align-items:flex-start}
+  .iss .ino{font-weight:700;color:var(--muted);font-size:13px}.iss .iwhere{font-size:19px;font-weight:700;margin:4px 0 8px}
+  .iss .spill{display:inline-block;padding:3px 11px;border-radius:999px;font-size:12.5px;font-weight:700;background:#e2e8f0}
+  .iss .spill.open{background:#dbeafe;color:#1e40af}.iss .spill.late{background:#fee2e2;color:#991b1b}.iss .spill.wait{background:#fef3c7;color:#92400e}.iss .spill.done{background:#dcfce7;color:#166534}
+  .iss .chips{display:flex;gap:6px;flex-wrap:wrap}.iss .chip{padding:2px 10px;border-radius:8px;background:#f1f5f9;font-size:12.5px;color:#334155}.iss .chip.bad{background:#fee2e2;color:#991b1b;font-weight:700}
+  .iss .iwhen{text-align:right}.iss .iwhen small{display:block;color:var(--muted)}.iss .iwhen b{font-size:15px}
+  .iss .flow{list-style:none;margin:0;padding:12px 14px;display:grid;grid-template-columns:repeat(4,1fr);gap:8px;background:#f8fafc;border:1px solid var(--line);border-radius:12px}
+  .iss .flow .st{display:flex;gap:10px;align-items:flex-start;position:relative}.iss .flow .st+.st::before{content:'';position:absolute;left:-14px;top:13px;width:12px;height:2px;background:#cbd5e1}
+  .iss .flow .dot{flex:none;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:700;background:#e2e8f0;color:#64748b}
+  .iss .flow .st.done .dot{background:#16a34a;color:#fff}.iss .flow .st.now .dot{background:#2563eb;color:#fff;box-shadow:0 0 0 4px #dbeafe}
+  .iss .flow b{display:block;font-size:13.5px}.iss .flow span,.iss .flow small,.iss .flow em{display:block;font-size:12.5px;color:#475569;font-style:normal}.iss .flow small{color:var(--muted)}.iss .flow .st.todo{opacity:.55}
+  .iss .icard{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:#fff}.iss .icard.act{border-left:5px solid #2563eb}
+  .iss .icard h4{margin:0 0 6px;font-size:13px;color:var(--muted);font-weight:700}.iss .icard .big{font-size:15.5px;white-space:pre-wrap;word-break:break-word;margin-bottom:6px}
+  .iss .kg{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px 16px;margin:0}.iss .kg dt{font-size:12px;color:var(--muted)}.iss .kg dd{margin:0;font-size:14px;word-break:break-word}
+  .iss .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:8px}.iss .tl{border-radius:10px;padding:8px 12px;background:#f1f5f9}.iss .tl small{display:block;font-size:12px;color:var(--muted)}.iss .tl b{font-size:18px}
+  .iss .tl.bad{background:#fee2e2}.iss .tl.good{background:#dcfce7}
+  @media (max-width:760px){.iss .flow{grid-template-columns:1fr 1fr}.iss .flow .st+.st::before{display:none}.iss .iwhen{text-align:left}}
   @media (max-width:640px){.iss .kv{grid-template-columns:1fr}.iss .kv dt{margin-top:6px}}
   `;
   document.head.appendChild(st);
@@ -82,9 +100,10 @@
   const lc = (v) => clean(v).toLowerCase();
 
   async function loadAll() {
-    const [setup, users, resps, leads, stations, issues] = await Promise.all([getIssueSetup(), listUsers(), listColl('issueResp'), listColl('issueLead'), listIssueStations(), listIssues()]);
-    Object.assign(D, { setup, users: users.map((u) => ({ ...u, level: lvOf(u.level) })), resps, leads, stations, issues });
+    const [setup, users, resps, leads, stations, issues, mst] = await Promise.all([getIssueSetup(), listUsers(), listColl('issueResp'), listColl('issueLead'), listIssueStations(), listIssues(), getMaster().catch(() => null)]);
+    Object.assign(D, { setup, users: users.map((u) => ({ ...u, level: lvOf(u.level) })), resps, leads, stations, issues }); MST = mst && mst.stations ? mst : null;
   }
+  let MST = null;
   async function reloadIssues() { D.issues = await listIssues(); }
 
   main.innerHTML = `<div class="iss"><div class="page-head"><div><h1>Issue Report</h1><p class="sub">Raise a production issue, add containment actions and approve them.</p></div></div>
@@ -160,7 +179,7 @@
       if (k === 'station') return sel('f_station', k, [], 'Select line first');
       if (k === 'nature') return sel('f_nature', k, S.natures);
       if (k === 'category') return sel('f_category', k, S.categories);
-      if (k === 'respDept') return sel('f_respDept', k, S.respDepts);
+      if (k === 'respDept') return sel('f_respDept', k, S.respDepts) + `<div><label class="l" for="f_respLine">Responsibility (line, optional)</label><select id="f_respLine"><option value="">All lines</option></select></div>`;
       if (k === 'description') return `<div class="full"><label class="l" for="f_description">${esc(F[k].label)}${mark(k)}</label><textarea id="f_description" rows="3" maxlength="600"></textarea></div>`;
       if (NUMS.has(k)) return `<div><label class="l" for="f_${k}">${esc(F[k].label)}${mark(k)}</label><input id="f_${k}" type="number" min="0" step="any"></div>`;
       return `<div><label class="l" for="f_${k}">${esc(F[k].label)}${mark(k)}</label><input id="f_${k}" maxlength="120"></div>`;
@@ -182,9 +201,9 @@
       return bits.length ? ` Optional sign-off: ${bits.join(', ')}.` : '';
     };
     const showRoute = () => {
-      const r = $('route'), dep = val('respDept'), cat = val('category');
+      const r = $('route'), dep = val('respDept'), cat = val('category'), rl = clean($('f_respLine')?.value);
       if (!dep || !cat) { r.innerHTML = '<span class="hint">Choose the responsible department and category to see who will get this issue.</span>'; return null; }
-      const route = buildRoute({ users: D.users, resps: D.resps, leads: D.leads, respDept: dep, category: cat, initiatorUid: me.uid, chosenUid: view.querySelector('#f_pickUser')?.value || '' });
+      const route = buildRoute({ users: D.users, resps: D.resps, leads: D.leads, respDept: dep, respLine: rl, category: cat, initiatorUid: me.uid, chosenUid: view.querySelector('#f_pickUser')?.value || '' });
       const names = (a) => a.map(uName).filter(Boolean).join(', ');
       const esc2 = ['l2', 'l3', 'l4', 'l5'].map((k, n) => route.tiers[k] ? `${levelLabel(n + 2)}: <b>${esc(uName(route.tiers[k]))}</b>` : '').filter(Boolean);
       const pickSel = route.canPick ? `<div style="margin:6px 0"><label class="l" for="f_pickUser">Responsible user *</label><select id="f_pickUser">${route.pickUids.map((u) => `<option value="${esc(u)}" ${u === route.primaryUid ? 'selected' : ''}>${esc(uName(u))}</option>`).join('')}</select></div>` : '';
@@ -193,11 +212,14 @@
         ? `${pickSel}<div>Responsible: <b>${esc(route.canPick ? uName(route.primaryUid) : names(route.responsibleUids))}</b>. Target ${esc(fmtDur(route.lead.target))} to add a containment action.</div>
            <div class="hint">${esc2.join(' · ') || 'No managers set above the responsible user.'}</div>
            <div class="hint">Approval by ${apName ? `<b>${esc(apName)}</b> (your superior)` : '<b>you</b> (the initiator)'}.${optText(route)}</div>`
-        : '<div class="warn">No responsible user is set for this department and category. Ask an administrator to add one in Issue Setup, Responsibility.</div>';
+        : '<div class="warn">No user is assigned to this department yet. Ask an administrator to set \'Works at\' for users in User Control, or add one in Issue Setup, Responsibility.</div>';
       return route;
     };
     ['area', 'line'].forEach((k) => { $('f_' + k)?.addEventListener('change', k === 'area' ? refreshLine : refreshStation); });
-    ['respDept', 'category'].forEach((k) => $('f_' + k)?.addEventListener('change', showRoute));
+    const respLines = (dep) => { try { return MST ? masterLines(MST, dep) : []; } catch { return []; } };
+    $('f_respDept')?.addEventListener('change', () => { fill('f_respLine', respLines(val('respDept')).sort(), 'All lines'); showRoute(); });
+    $('f_respLine')?.addEventListener('change', showRoute);
+    $('f_category')?.addEventListener('change', showRoute);
     $('route').addEventListener('change', (e) => { if (e.target.id === 'f_pickUser') { const keep = e.target.value; showRoute(); const el = $('f_pickUser'); if (el) el.value = keep; } });
     $('rsub').onclick = async (ev) => {
       const btn = ev.currentTarget, err = $('rerr'); err.textContent = '';
@@ -207,6 +229,7 @@
         if (f.required && !v) { err.textContent = `${f.label} is required.`; $('f_' + f.key)?.focus(); return; }
         d[f.key] = NUMS.has(f.key) ? (v === '' ? 0 : Number(v)) : v;
       }
+      d.respLine = clean($('f_respLine')?.value);
       const route = showRoute();
       if (!route || !route.responsibleUids.length) { err.textContent = 'No responsible user is set for this department and category. An administrator must add one in Issue Setup.'; return; }
       btn.disabled = true;
@@ -240,15 +263,32 @@
     const route = [['Level 2', i.tiers?.l2], ['Level 3', i.tiers?.l3], ['Level 4', i.tiers?.l4], ['Level 5', i.tiers?.l5]].filter(([, u]) => u).map(([l, u]) => `${l}: ${uName(u) || '?'}`).join(' · ');
     const seeRep = ['action', 'approve', 'cosign', 'escalated', 'info'].includes(r.role) || ctx.isAdmin;
     const live = i.status === 'open' && (r.role === 'action' || ctx.isAdmin) ? runLoss(i, i.mp, i.mc) : null;
-    const body = `${seeRep ? `<div id="repbox">${repeatHtml(repeatOf(i))}</div>` : ''}${live ? `<div class="est" id="liveBox">Downtime so far: <b>${esc(fmtDur(live.dt * 60))}</b> since the issue was reported (${esc(fmtDT(issueMs(i)))}).</div>` : ''}<dl class="kv">
-      ${row('Issue no.', issueNo(i))}${row('Status', i.status === 'open' ? 'Open' : i.status === 'pending' ? 'Waiting for approval' : 'Closed')}${row('Reported', fmtDT(issueMs(i)))}${row('Week', i.weekMonth)}
-      ${row(L('area'), i.area)}${row(L('line'), i.line)}${row(L('station'), i.station)}${row(L('nature'), i.nature)}${row(L('model'), i.model)}${row(L('partNumber'), i.partNumber)}
-      ${row(L('description'), i.description)}${row(L('category'), i.category)}${row(L('respDept'), i.respDept)}${row('Repeat', i.repeat)}
-      ${row('Reported by', i.reportedByName)}${row('Responsible', i.responsibleName || (i.responsibleUids || []).map(uName).join(', '))}${row('Escalation path', route)}${row('Approver (initiator)', uName(i.approverUid) || i.reportedByName)}${row('Optional sign-off by', (i.optApprovalUids || []).map(uName).join(', '))}${row('Signed off', (i.signoffs || []).map((x) => `${x.name}${x.note ? ': ' + x.note : ''}`).join('; '))}${row('Target', i.lead ? fmtDur(i.lead.target) : '')}
-      ${row(L('containment'), i.containment)}${row('Containment by', i.containmentBy?.name)}${row('Containment time', fmtDT(tsMs(i.containmentAt)).replace(/^-$/, ''))}${row('Delay', i.delayMin != null ? fmtDur(i.delayMin) + (i.leadResult ? ` (${i.leadResult})` : '') : '')}
-      ${row('Escalation level', i.status === 'open' ? '' : i.escalationLevel)}${row('Total MP', i.mp || '')}${row('No. of M-C', i.mc || '')}${row('Downtime (report to containment)', i.downtimeH != null && i.status !== 'open' ? i.downtimeH + ' h' : '')}${row('Hours lost (system)', i.hoursTotal || '')}${row('Cost (system)', i.mhCost ? i.mhCost.toLocaleString('en-IN') : '')}${i.lossCorrectedH != null ? row('Corrected loss (hours)', `${i.lossCorrectedH} h, cost ${inr(i.lossCorrectedCost)}, by ${i.lossCorrectedBy || ''}`) + row('Reason for correction', i.lossCorrectedReason) : ''}
-      ${row('Returned', i.returnCount ? `${i.returnCount} time(s). Last note: ${i.returnNote || ''}` : '')}${row('Approved by', i.approvedBy?.name)}${row('Approver note', i.approvalNote)}${row('PSM', i.psmRefer ? `Refer to PSM. ${i.psmReason || ''}` : '')}
-      </dl>`;
+    const T = i.tiers || {}, lead = i.lead || {};
+    const stCls = i.status === 'open' ? (r.overdue ? 'late' : 'open') : i.status === 'pending' ? 'wait' : 'done';
+    const stTxt = i.status === 'open' ? (r.overdue ? 'Open · overdue' : 'Open') : i.status === 'pending' ? 'Waiting for approval' : 'Closed';
+    const cAt = tsMs(i.containmentAt), aAt = tsMs(i.approvedAt) || i.approvedMs || 0;
+    const dly = i.delayMin != null ? `${fmtDur(i.delayMin)}${i.leadResult ? ' · ' + i.leadResult : ''}` : '';
+    const step = (n, label, state, who, when, note) => `<li class="st ${state}"><span class="dot">${state === 'done' ? '✓' : n}</span><div><b>${label}</b>${who ? `<span>${esc(who)}</span>` : ''}${when ? `<small>${esc(when)}</small>` : ''}${note ? `<em>${esc(note)}</em>` : ''}</div></li>`;
+    const raised = step(1, 'Issue raised', 'done', i.reportedByName, fmtDT(issueMs(i)), '');
+    const contained = step(2, 'Containment action', i.status === 'open' ? 'now' : 'done', i.status === 'open' ? (i.responsibleName || (i.responsibleUids || []).map(uName).join(', ')) : i.containmentBy?.name, i.status === 'open' ? (lead.target ? `Target ${fmtDur(lead.target)} · ${fmtDur(r.mins)} elapsed` : '') : fmtDT(cAt), i.status === 'open' ? '' : dly);
+    const approval = step(3, 'Approval', i.status === 'pending' ? 'now' : i.status === 'closed' ? 'done' : 'todo', uName(i.approverUid) || i.reportedByName, i.status === 'closed' ? fmtDT(aAt) : '', i.status === 'closed' ? (i.approvalNote || '') : (i.returnCount ? `Returned ${i.returnCount}×` : ''));
+    const closed = step(4, 'Closed', i.status === 'closed' ? 'done' : 'todo', i.status === 'closed' ? i.approvedBy?.name : '', '', '');
+    const chip = (t) => (t ? `<span class="chip">${esc(t)}</span>` : '');
+    const kv = (rows) => { const h = rows.filter(([, v]) => v !== undefined && v !== null && v !== '').map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join(''); return h ? `<dl class="kg">${h}</dl>` : ''; };
+    const tile = (l, v, tone) => `<div class="tl ${tone || ''}"><small>${esc(l)}</small><b>${esc(v)}</b></div>`;
+    const showImpact = i.status !== 'open' && (i.downtimeH != null || i.hoursTotal || i.mhCost || i.lossCorrectedH != null);
+    const body = `<div class="idet">${seeRep ? `<div id="repbox">${repeatHtml(repeatOf(i))}</div>` : ''}${live ? `<div class="est" id="liveBox">Downtime so far: <b>${esc(fmtDur(live.dt * 60))}</b> since the issue was reported (${esc(fmtDT(issueMs(i)))}).</div>` : ''}
+      <div class="ihead"><div><span class="spill ${stCls}">${stTxt}</span> <span class="ino">${esc(issueNo(i))}</span><div class="iwhere">${esc([i.area, i.line, i.station].filter(Boolean).join(' › '))}</div>
+        <div class="chips">${chip(i.category)}${chip(i.nature)}${chip(i.respDept && 'Responsibility: ' + i.respDept)}${i.respLine ? chip(i.respLine) : ''}${chip(i.model)}${chip(i.partNumber)}${i.repeat === 'Repeated' ? '<span class="chip bad">Repeated</span>' : ''}${i.psmRefer ? '<span class="chip bad">PSM</span>' : ''}</div></div>
+        <div class="iwhen"><small>Reported</small><b>${esc(fmtDT(issueMs(i)))}</b><small>${esc(i.weekMonth || '')}</small></div></div>
+      <ol class="flow">${raised}${contained}${approval}${closed}</ol>
+      <div class="icard"><h4>Problem</h4><div class="big">${esc(i.description || '-')}</div>${kv([['Reported by', i.reportedByName]])}</div>
+      <div class="icard"><h4>Responsibility</h4>${kv([[L('respDept'), i.respDept], ['Responsible', i.responsibleName || (i.responsibleUids || []).map(uName).join(', ')], ['Approver (initiator)', uName(i.approverUid) || i.reportedByName], ['Escalation path', route], ['Optional sign-off by', (i.optApprovalUids || []).map(uName).join(', ')], ['Signed off', (i.signoffs || []).map((x) => `${x.name}${x.note ? ': ' + x.note : ''}`).join('; ')]])}</div>
+      ${i.status !== 'open' || i.containment ? `<div class="icard act"><h4>${esc(L('containment'))}</h4><div class="big">${esc(i.containment || '-')}</div>${kv([['Done by', i.containmentBy?.name], ['Time', cAt ? fmtDT(cAt) : ''], ['Delay against target', dly], ['Escalation level', i.status === 'open' ? '' : i.escalationLevel], ['Total MP', i.mp || ''], ['No. of M-C', i.mc || '']])}</div>` : ''}
+      ${showImpact ? `<div class="icard"><h4>Impact</h4><div class="tiles">${i.downtimeH != null ? tile('Downtime (system)', i.downtimeH + ' h', 'bad') : ''}${i.hoursTotal ? tile('Hours lost (system)', i.hoursTotal + ' h') : ''}${i.mhCost ? tile('Cost (system)', '₹ ' + Number(i.mhCost).toLocaleString('en-IN')) : ''}${i.lossCorrectedH != null ? tile('Corrected loss', i.lossCorrectedH + ' h' + (i.lossCorrectedCost != null ? ' · ₹ ' + inr(i.lossCorrectedCost) : ''), 'good') : ''}</div>
+        ${i.lossCorrectedH != null ? kv([['Corrected loss (hours)', `${i.lossCorrectedH} h, cost ${inr(i.lossCorrectedCost)}, by ${i.lossCorrectedBy || ''}`], ['Reason for correction', i.lossCorrectedReason]]) : ''}</div>` : ''}
+      ${i.returnCount || i.status === 'closed' || i.psmRefer ? `<div class="icard"><h4>Approval</h4>${kv([['Returned', i.returnCount ? `${i.returnCount} time(s). Last note: ${i.returnNote || ''}` : ''], ['Approved by', i.approvedBy?.name], ['Approved on', aAt ? fmtDT(aAt) : ''], ['Approver note', i.approvalNote], ['PSM', i.psmRefer ? `Refer to PSM. ${i.psmReason || ''}` : '']])}</div>` : ''}
+    </div>`;
     const actions = [{ label: 'Close', onClick: (x) => x.close() }];
     if (canApprove) { actions.push({ label: 'Return', kind: 'danger', onClick: (x) => { x.close(); returnDlg(i); } }, { label: 'Approve and close', kind: 'primary', onClick: (x) => { x.close(); approveDlg(i); } }); }
     if (canCosign) { actions.push({ label: 'Return', kind: 'danger', onClick: (x) => { x.close(); returnDlg(i); } }, { label: 'Sign off', kind: 'primary', onClick: (x) => { x.close(); signoffDlg(i); } }); }
@@ -321,7 +361,9 @@
   function approveDlg(i) {
     const m = openModal({
       title: `Approve and close: ${issueNo(i)}`,
-      html: `${repeatHtml(repeatOf(i))}<p class="hint">Containment by ${esc(i.containmentBy?.name || '')}: ${esc(i.containment || '')}<br>System downtime ${esc(i.downtimeH)} h, loss ${esc(i.hoursTotal || 0)} man-hours${i.lossCorrectedH != null ? `. <b>Corrected loss ${esc(i.lossCorrectedH)} h</b> by ${esc(i.lossCorrectedBy || '')}. Reason: ${esc(i.lossCorrectedReason || '')}` : ''}.</p>
+      html: `${repeatHtml(repeatOf(i))}<div class="icard act" style="margin:8px 0"><h4>Containment action by ${esc(i.containmentBy?.name || '')}</h4><div class="big">${esc(i.containment || '')}</div>
+          <div class="tiles"><div class="tl bad"><small>System downtime</small><b>${esc(i.downtimeH)} h</b></div><div class="tl"><small>Hours lost (system)</small><b>${esc(i.hoursTotal || 0)} h</b></div>${i.lossCorrectedH != null ? `<div class="tl good"><small>Corrected loss by ${esc(i.lossCorrectedBy || '')}</small><b>${esc(i.lossCorrectedH)} h</b></div>` : ''}</div>
+          ${i.lossCorrectedH != null ? `<div class="hint" style="margin:0">Corrected loss ${esc(i.lossCorrectedH)} h. Reason: ${esc(i.lossCorrectedReason || '')}</div>` : ''}${i.delayMin != null ? `<div class="hint" style="margin:6px 0 0">Response time ${esc(fmtDur(i.delayMin))}${i.leadResult ? ' · ' + esc(i.leadResult) : ''}</div>` : ''}</div>
         <form class="fg" autocomplete="off">${stageFields('approver').some((f) => f.key === 'approvalNote') ? `<div class="full"><label class="l" for="a_note">${esc(LABELS.approvalNote || 'Approver comment')}${D.setup.fields.approvalNote?.required ? ' *' : ''}</label><textarea id="a_note" rows="3"></textarea></div>` : ''}</form><div class="err" id="a_err"></div>`,
       actions: [{ label: 'Cancel', onClick: (x) => x.close() }, { label: 'Approve and close', kind: 'primary', onClick: save }]
     });
@@ -377,7 +419,7 @@
       <select id="s"><option value="">All status</option>${[['open', 'Open'], ['pending', 'Waiting for approval'], ['closed', 'Closed']].map(([k, l]) => `<option value="${k}" ${flt.status === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
       <select id="a">${opt(uniq('area'), flt.area, 'All areas')}</select><select id="d">${opt(uniq('respDept'), flt.dept, 'All responsibilities')}</select><select id="c">${opt(uniq('category'), flt.cat, 'All categories')}</select>
       <select id="m">${opt(months, flt.month, 'All months')}</select><span style="flex:1"></span>
-      <button type="button" class="btn btn-ghost" id="xl"><span>Export Excel</span></button></div>
+      ${ctx.isAdmin || ctx.profile?.canExport ? '<button type="button" class="btn btn-ghost" id="xl"><span>Export Excel</span></button>' : ''}</div>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>No.</th><th>Reported</th><th>Area</th><th>Line</th><th>Station</th><th>Category</th><th>Responsibility</th><th>Status</th><th class="num">Delay</th></tr></thead><tbody id="tb"></tbody></table></div><div class="note" id="nt"></div>`;
     const draw = () => {
       const q = lc(flt.q);
@@ -388,7 +430,7 @@
       view._list = list;
     };
     [['q', 'q', 'input'], ['s', 'status', 'change'], ['a', 'area', 'change'], ['d', 'dept', 'change'], ['c', 'cat', 'change'], ['m', 'month', 'change']].forEach(([id, k, ev]) => { view.querySelector('#' + id).addEventListener(ev, (e) => { flt[k] = e.target.value; draw(); }); });
-    view.querySelector('#xl').onclick = exportXlsx;
+    if (view.querySelector('#xl')) view.querySelector('#xl').onclick = exportXlsx;
     draw();
   }
 
@@ -431,11 +473,11 @@
   function show(k) {
     tab = k;
     const b = myBuckets(), todo = b.action.length + b.approve.length + b.escalated.length;
-    tabsEl.innerHTML = [['tasks', 'My tasks', todo], ['raise', 'Raise issue', 0], ['all', 'All issues', 0], ['psm', 'PSM candidates', 0]].map(([key, l, n]) => `<button type="button" data-k="${key}" class="${key === k ? 'on' : ''}">${l}${n ? `<b>${n}</b>` : ''}</button>`).join('');
+    tabsEl.innerHTML = [['raise', 'Raise issue', 0], ['tasks', 'My tasks', todo], ['all', 'All issues', 0], ['psm', 'PSM candidates', 0]].map(([key, l, n]) => `<button type="button" data-k="${key}" class="${key === k ? 'on' : ''}">${l}${n ? `<b>${n}</b>` : ''}</button>`).join('');
     tabsEl.querySelectorAll('button').forEach((el) => { el.onclick = () => show(el.dataset.k); });
     ({ tasks: drawTasks, raise: drawRaise, all: drawAll, psm: drawPsm })[k]();
   }
-  show(location.hash === '#raise' ? 'raise' : 'tasks');
+  show(location.hash === '#tasks' ? 'tasks' : 'raise');   // the page opens on the Raise issue form
 </script>
 </body>
 </html>
